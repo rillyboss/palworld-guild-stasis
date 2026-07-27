@@ -293,6 +293,7 @@ Scripts/main.lua                   the mod
 docs/RESEARCH.md                   verified ground truth, dead ends, and prior art
 docs/TESTPLAN.md                   M1-M6 milestones
 docs/V2-PLAN.md                    the stop-work mechanism, three ruled-out alternatives, and raids
+docs/PUBLISHING.md                 packaging, release checklist, and deploying to a server
 
 tools/setup-local-testserver.ps1   stand up a local Windows test server
 tools/palworld-check-platform.ps1  can this host run the mod? RUN THIS BEFORE PAYING
