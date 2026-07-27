@@ -109,6 +109,7 @@ WorkshopRootDir=<absolute path to Mods\Workshop>
 | `topup_once_on_offline` | `true` | See below |
 | `stop_work_when_offline` | `false` | **Experimental, incomplete** — no restore map yet |
 | `verbose_pals` | `false` | Per-Pal write logging. Noisy but it's the isolation evidence |
+| `status_file` | `nil` | Path for the status JSON, relative to `Pal/Binaries/Win64`. See below |
 | `force_suppress_for_testing` | `false` | **Test only.** Suppresses every guild unconditionally |
 
 ### Why `topup_once_on_offline` exists
@@ -132,6 +133,73 @@ State is recomputed from live objects every sweep and applied idempotently, so i
 
 Camps are found with `FindAllOf("PalBaseCampModel")` and matched on the camp's own `GetGroupIdBelongTo()`. That ownership check is the per-guild guarantee — a camp that doesn't claim this guild is never touched.
 
+## Debugging and admin commands
+
+You can't attach a debugger to a rented game server, so the mod is built to produce its own evidence.
+
+### Admin commands
+
+Two transports, because neither is guaranteed on every host. Same commands either way.
+
+**Server console** — prefix with `stasis.`:
+
+| Command | What it does |
+|---|---|
+| `stasis.status` | Health summary: version, mode, sweeps completed, uptime, players online, guilds suppressed, active overrides, write errors |
+| `stasis.guilds` | Every guild with camp count, member count, `allOffline`, whether it's suppressed, its override state, and the reason it isn't protected |
+| `stasis.pals <idprefix>` | Live per-Pal detail for one guild — stomach, decay rate, SAN, hunger type, sickness |
+| `stasis.suppress <idprefix>` | Force this guild suppressed **now**, ignoring presence and the grace delay |
+| `stasis.release <idprefix>` | Force this guild un-suppressed |
+| `stasis.auto <idprefix>` | Clear the override, return to automatic behaviour |
+| `stasis.sweep` | Run a sweep immediately instead of waiting for the timer |
+| `stasis.help` | List the commands |
+
+An id prefix is enough — `stasis.pals 78686694` works, and ambiguous prefixes are rejected rather than guessed.
+
+Console registration uses UE4SS's `RegisterConsoleCommandHandler`, which is **not guaranteed to be reachable** from a headless Palworld server's own console. Each verb is registered independently and failure only logs, so the mod never breaks over it. Check the startup log for `console commands registered: N`.
+
+**Command file** — works everywhere, including hosts with no usable console. Write a line into:
+
+```
+Pal/Binaries/Win64/ue4ss/Mods/GuildStasis/command.txt
+```
+
+using the panel's file editor or SFTP, **without** the `stasis.` prefix (e.g. just `status`). The mod consumes it on the next sweep and writes the reply to `command-out.txt`. Lines starting with `#` are ignored. The file is truncated when read, so a command runs exactly once.
+
+`suppress` / `release` set a **per-guild manual override** that the sweep honours ahead of both presence and the grace delay. That's the intervention path when someone reports starving Pals and you don't want to wait out `grace_seconds` or edit config.
+
+### Heartbeat
+
+Every sweep logs one greppable line:
+
+```
+HEARTBEAT sweep=42 uptime=1260s guilds=6 camps=11 online=1 protected=5 pals_written=63 write_errors=0
+```
+
+If this **stops appearing**, the timer loop has died — the failure mode UE4SS's `LoopAsync` bug causes, where the mod stays installed and silently does nothing. It's the single most important thing to monitor, because nothing else about the server looks wrong when it happens.
+
+### Status JSON
+
+Set `status_file` in `config.lua` and the mod writes machine-readable state every sweep:
+
+```lua
+status_file = "ue4ss/Mods/GuildStasis/status.json",   -- relative to Pal/Binaries/Win64
+```
+
+It contains sweep count, uptime, mode flags, and per guild: `protected`, `camps`, `pals`, `offline_s`, `min_san`, `min_stomach_pct`, `sick`, and crucially **`decay_zero` vs `decay_nonzero`** — read back *after* writing.
+
+That last pair is the real test. A guild marked `protected` with `decay_nonzero > 0` means the writes aren't landing, and no amount of log reading would tell you that.
+
+### Operator tooling
+
+```powershell
+tools\palworld-modstatus.ps1 -HostName bisect
+```
+
+Pulls the log and status JSON over FTP or SFTP and judges four things: **loaded** (banner + hook), **alive** (heartbeat freshness, measured against the log's own newest line so server clock skew doesn't matter), **working** (are writes landing on protected guilds), and **clean** (errors). Prints a per-guild table.
+
+Related: `palworld-check-platform.ps1` (can this host run the mod at all), `palworld-backup.ps1` / `nitrado-verify-backup.ps1` (back up and verify), `palworld-verify-host.ps1` (host + world identity), `palworld-migrate.ps1` (move a world between hosts).
+
 ## Risks to decide about
 
 - **UE4SS issue #1091 is open.** Installing UE4SS on a Palworld dedicated server has been reported to make players reconnect as brand-new characters with fresh GUIDs. This is a risk of UE4SS itself, not this mod. Back up saves, set `DedicatedServerName` in `GameUserSettings.ini` **before** installing, then verify an existing character survives.
@@ -142,15 +210,29 @@ Camps are found with `FindAllOf("PalBaseCampModel")` and matched on the camp's o
 ## Layout
 
 ```
-Info.json                        first-party loader manifest (Type=Lua, IsServer=true)
-enabled.txt                      UE4SS enable marker
-Scripts/config.lua               all configuration
-Scripts/main.lua                 the mod
-docs/RESEARCH.md                 verified ground truth, dead ends, and prior art
-docs/TESTPLAN.md                 M1-M6 milestones
-tools/setup-local-testserver.ps1 stands up a local test server
-tools/probe/                     throwaway discovery mods (not shipped)
+Info.json                          first-party loader manifest (Type=Lua, IsServer=true)
+enabled.txt                        UE4SS enable marker
+Scripts/config.lua                 all configuration
+Scripts/main.lua                   the mod
+docs/RESEARCH.md                   verified ground truth, dead ends, and prior art
+docs/TESTPLAN.md                   M1-M6 milestones
+docs/V2-PLAN.md                    stop-work + raid immunity, and what's already ruled out
+
+tools/setup-local-testserver.ps1   stand up a local Windows test server
+tools/palworld-check-platform.ps1  can this host run the mod? RUN THIS BEFORE PAYING
+tools/palworld-modstatus.ps1       is the mod alive and actually working, remotely
+tools/palworld-backup.ps1          back up saves + config (FTP or SFTP)
+tools/nitrado-verify-backup.ps1    verify a backup without re-downloading it
+tools/palworld-verify-host.ps1     host capability + world identity in one run
+tools/palworld-migrate.ps1         move a world between hosts
+tools/palhost.ps1                  protocol-agnostic facade (FTP or SFTP)
+tools/nitrado-lib.ps1              FTP primitives + save-integrity helpers
+tools/sftp-lib.ps1                 SFTP primitives (needs Posh-SSH)
+tools/*.config.ps1.example         host credential templates (real ones are gitignored)
+tools/probe/                       throwaway discovery mods (not shipped)
 ```
+
+Host credentials live in `tools/<name>.config.ps1`, which is gitignored. Copy an `.example` and fill it in. Each host gets its own file, and `Use-PalHostAny <name>` selects it.
 
 `docs/RESEARCH.md` is worth reading before changing anything — it records what does **not** exist and what silently fails, which is most of the value.
 

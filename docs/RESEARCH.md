@@ -24,7 +24,8 @@ Run against a local Windows dedicated server, app 2394010, buildid `24181105`, r
 | **`SetDecreaseFullStomachRates(FName, 0.0)` is a HARD STOP** | `GetFullStomachDecreasingRate()` read `1.0` before the write and `0.0` immediately after, with the game's own working-state entry also present. So the `FFloatContainer` does **not** sum â€” a `0.0` entry wins. This was flagged as make-or-break for the hunger half; it works. |
 | **`SetDisableNaturalUpdate(FName, true)` writes and reads back** | `GetDisableNaturalUpdate()` returns `true` after the call. Whether it actually halts SAN decay is a separate question â€” a set flag is not a proven effect. |
 | **The full guildâ†’Pal walk works** | `2 pal(s) in 1 camp(s)`, with live per-Pal `FullStomach` / `SanityValue` / decay rate / `HungerType` / `WorkerSick`. |
-| `MaxFullStomach` = 100, `MaxSanityValue` = 100 | Not the ~300 the SDK notes implied. |
+| `MaxSanityValue` = 100 | Consistent across every Pal observed. |
+| `MaxFullStomach` **varies, roughly 100-600** | By species and level. A single local test Pal read 100, which was misleading — a live server showed 100, 210, 230, 280, 300, 410, 450, 460, 480, 490, 530 and 600. Never assume a fixed maximum; always read `GetMaxFullStomach()` per Pal, and express thresholds as a ratio. |
 | `EPalGuildPlayerStatus` observed | `0` = Logout, `1` = Online. Confirmed by watching the flag flip across a real login. Previously known only from header ordering. |
 | Guild name | Read the **`GuildName`** property. `GetGuildName()`/`GetGroupName()` return FString handles that do not stringify from Lua, and the `GroupName` *property* holds the owning player's UID, not a name. |
 | SAN moves fast when simulated | Observed ~2.0/min drain on a working Pal with no beds, and strong recovery (up to full) once fed with beds available. Hunger moved far more slowly. **SAN, not starvation, is the real problem.** |
