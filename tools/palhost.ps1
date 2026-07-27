@@ -134,6 +134,20 @@ function Send-PalTree {
     return Send-FtpTree -LocalRoot $LocalRoot -RemoteRoot $p -ExcludeDirs $ExcludeDirs
 }
 
+function Save-PalTree {
+    param(
+        [Parameter(Mandatory)][string]$RemotePath,
+        [Parameter(Mandatory)][string]$Destination,
+        [string[]]$ExcludeDirs = @()
+    )
+    $p = Resolve-PalPath -Path $RemotePath
+    if ($script:PalHostProtocol -eq 'sftp') {
+        return Save-SftpTree -RemotePath $p -Destination $Destination -ExcludeDirs $ExcludeDirs
+    }
+    # The FTP implementation predates ExcludeDirs; it takes everything.
+    return Save-FtpTree -Path $p -Destination $Destination
+}
+
 # windows | linux | unknown, plus whether UE4SS can run here at all.
 function Get-PalPlatform {
     $report = [pscustomobject]@{

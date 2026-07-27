@@ -141,7 +141,14 @@ function Send-SftpFile {
         }
         Set-SFTPItem -SessionId $id -Path $upload -Destination $remoteDir -Force -ErrorAction Stop | Out-Null
     } finally {
-        if ($stage) { Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue }
+        # Defensive: only ever delete a path we just created under TEMP, and never
+        # anything short enough to be a root. A recursive delete driven by a
+        # variable is worth this much paranoia.
+        if ($stage -and $stage.Length -gt 12 -and
+            $stage.StartsWith([IO.Path]::GetTempPath(), [StringComparison]::OrdinalIgnoreCase) -and
+            (Test-Path -LiteralPath $stage)) {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 
     $remoteSize = Get-SftpFileSize -Path $RemotePath
@@ -179,6 +186,48 @@ function Save-SftpFile {
     Get-SFTPItem -SessionId (Get-PalSftpSessionId) -Path $RemotePath -Destination $LocalDir -Force -ErrorAction Stop | Out-Null
     $leaf = ($RemotePath -split '/')[-1]
     return (Join-Path $LocalDir $leaf)
+}
+
+# Recursive download, returning the same manifest shape as the FTP version so the
+# backup script can be written once.
+function Save-SftpTree {
+    param(
+        [Parameter(Mandatory)][string]$RemotePath,
+        [Parameter(Mandatory)][string]$Destination,
+        [int]$Depth = 0,
+        [int]$MaxDepth = 12,
+        [string[]]$ExcludeDirs = @()
+    )
+    $manifest = @()
+    if ($Depth -gt $MaxDepth) { return $manifest }
+    if (-not (Test-Path $Destination)) { New-Item -ItemType Directory -Force -Path $Destination | Out-Null }
+
+    foreach ($c in (Get-SftpChildren -Path $RemotePath -Quiet)) {
+        if ($c.IsDir) {
+            if ($ExcludeDirs -contains $c.Name) { continue }
+            $manifest += Save-SftpTree -RemotePath $c.Path -Destination (Join-Path $Destination $c.Name) `
+                                       -Depth ($Depth + 1) -MaxDepth $MaxDepth -ExcludeDirs $ExcludeDirs
+        } else {
+            $local = Join-Path $Destination $c.Name
+            try {
+                Save-SftpFile -RemotePath $c.Path -LocalDir $Destination | Out-Null
+                $size = if (Test-Path -LiteralPath $local) { (Get-Item -LiteralPath $local).Length } else { -1 }
+                $manifest += [pscustomobject]@{
+                    RemotePath = $c.Path; LocalPath = $local
+                    RemoteSize = $c.Size; LocalSize = $size
+                    Match      = ($c.Size -eq $size)
+                    Sha256     = if ($size -ge 0) { (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash } else { $null }
+                }
+            } catch {
+                $manifest += [pscustomobject]@{
+                    RemotePath = $c.Path; LocalPath = $local
+                    RemoteSize = $c.Size; LocalSize = -1; Match = $false; Sha256 = $null
+                    Error      = $_.Exception.Message
+                }
+            }
+        }
+    }
+    return $manifest
 }
 
 # Which build is this host running? Decides whether UE4SS can work at all.

@@ -396,12 +396,25 @@ end
 local function collectBaseCamps()
     local out = {}
     local arr = try(function() return FindAllOf("PalBaseCampModel") end) or {}
+    local perGuild = {}
     for i = 1, #arr do
         local m = arr[i]
         if alive(m) and not isCDO(m) then
+            local group = guidStr(firstOf(m, { "GetGroupIdBelongTo", "GroupIdBelongTo" }))
+            -- A camp needs its OWN identity in logs. Labelling by guild id made
+            -- every camp of a multi-camp guild look identical, with slot numbers
+            -- restarting per camp -- unreadable on a server where one guild has 3
+            -- camps. Prefer the camp's real id; fall back to a per-guild ordinal.
+            local campId = guidStr(firstOf(m, { "GetId", "Id", "GetBaseCampId", "BaseCampId" }))
+            local ordinal = (perGuild[group or "?"] or 0) + 1
+            perGuild[group or "?"] = ordinal
             out[#out + 1] = {
-                model = m,
-                group = guidStr(firstOf(m, { "GetGroupIdBelongTo", "GroupIdBelongTo" })),
+                model   = m,
+                group   = group,
+                campId  = campId,
+                ordinal = ordinal,
+                -- short, stable-ish label for logs
+                label   = (campId and campId:sub(1, 8) or string.format("%s#%d", (group or "?"):sub(1, 8), ordinal)),
             }
         end
     end
@@ -446,7 +459,7 @@ local function forEachGuildPal(guild, allCamps, fn)
         -- own GetGroupIdBelongTo() does not equal this guild is never touched.
         if alive(entry.model) and entry.group ~= nil and entry.group == guild.id then
             camps = camps + 1
-            pals = pals + walkCamp(entry.model, entry.group)
+            pals = pals + walkCamp(entry.model, entry.label or entry.group)
         end
     end
 
@@ -643,8 +656,29 @@ end
 
 local guildState = {}   -- guildId -> { offlineSince = ms, suppressed = bool, name = str }
 
+-- Diagnostics. A remote operator cannot attach a debugger, so the mod has to be
+-- able to prove three things from its own output: that it is still running, what
+-- it decided, and whether its writes actually landed.
+local sweepCount   = 0
+local startedAt    = os.time()
+local lastSweepAt  = 0
+local writeErrors  = 0
+
+-- Admin overrides set by console/file commands: guildId -> "suppress" | "release".
+-- MUST be declared before sweep(), which reads it. A Lua local declared later is
+-- simply not in scope there, and indexing the resulting nil global would error out
+-- mid-sweep.
+local manualOverride = {}
+
+local function palRatio(v, maxv)
+    if type(v) ~= "number" or type(maxv) ~= "number" or maxv <= 0 then return nil end
+    return v / maxv
+end
+
 local function sweep()
     local t = now()
+    sweepCount = sweepCount + 1
+    lastSweepAt = t
 
     local refreshEvery = math.max(1, math.floor((CFG.controller_refresh_ms or 5000) / 1000))
     if (t - lastRefreshAt) >= refreshEvery then
@@ -667,6 +701,15 @@ local function sweep()
         st.name = guild.name
 
         local allOffline, why = guildAllOffline(guild)
+
+        -- Admin override from a console/file command, if any. Deliberately checked
+        -- before the test flag so an operator's explicit instruction wins.
+        local override = manualOverride[guild.id]
+        if override == "suppress" then
+            allOffline = true; why = nil
+        elseif override == "release" then
+            allOffline = false; why = "manual override: release"
+        end
 
         -- TEST ONLY: pretend every guild is offline so the levers can be proven
         -- on a single-account server (see config.lua for why this is necessary).
@@ -714,8 +757,12 @@ local function sweep()
                                         reason = string.format("in grace (%.0fs/%ds)", offlineFor, CFG.grace_seconds or 300) }
             else
                 local firstTime = not st.suppressed
+                -- Evidence gathering: after writing, read the values BACK so the
+                -- status file can show whether suppression actually took hold.
+                local stat = { pals = 0, decayZero = 0, decayOther = 0,
+                               minSan = nil, minStomachPct = nil, sick = 0 }
                 local camps, pals, err = forEachGuildPal(guild, allCamps, function(param, label)
-                    local before = CFG.verbose_pals and palSnapshot(param) or nil
+                    local before = palSnapshot(param)
                     local h = CFG.freeze_hunger and freezeHunger(param, true) or "skipped"
                     local s = applySanity(param, true)
                     local w = CFG.stop_work_when_offline and stopWork(param, true) or "skipped"
@@ -723,11 +770,27 @@ local function sweep()
                     if firstTime and CFG.topup_once_on_offline and CFG.sanity_mode ~= "topup" then
                         tu = sanityTopUp(param)
                     end
+
+                    local after = palSnapshot(param)
+                    stat.pals = stat.pals + 1
+                    if after.decayRate == 0 then stat.decayZero = stat.decayZero + 1
+                    else stat.decayOther = stat.decayOther + 1 end
+                    if type(after.sanity) == "number" and (stat.minSan == nil or after.sanity < stat.minSan) then
+                        stat.minSan = after.sanity
+                    end
+                    local pct = palRatio(after.stomach, after.maxStomach)
+                    if pct and (stat.minStomachPct == nil or pct < stat.minStomachPct) then
+                        stat.minStomachPct = pct
+                    end
+                    if after.workerSick ~= nil and after.workerSick ~= 0 then stat.sick = stat.sick + 1 end
+                    if h:find("failed") or s:find("failed") then writeErrors = writeErrors + 1 end
+
                     if CFG.verbose_pals then
                         log("  suppress %s: %s | hunger=%s sanity=%s work=%s topup=%s",
                             label, fmtSnapshot(before), h, s, w, tu)
                     end
                 end)
+                st.stat = stat
                 if err then log("guild '%s': %s", guild.name, err) end
                 if firstTime then
                     log("guild '%s' (%s) SUPPRESSED after %.0fs offline -- %d pal(s) in %d camp(s)%s",
@@ -736,14 +799,22 @@ local function sweep()
                 end
                 st.suppressed = true
                 report[#report + 1] = { id = guild.id, name = guild.name, protected = true,
-                                        pals = pals, camps = camps }
+                                        pals = pals, camps = camps, offlineFor = offlineFor,
+                                        stat = stat }
             end
         end
     end
 
-    log("sweep done: %d guild(s), %d player(s) online", #guilds, (function()
-        local n = 0; for _ in pairs(onlineUids) do n = n + 1 end; return n
-    end)())
+    -- HEARTBEAT: one machine-greppable line per sweep. If this stops appearing the
+    -- timer loop has died (the failure mode UE4SS's LoopAsync bug causes), and the
+    -- mod is silently doing nothing while still looking installed.
+    local onlineCount = 0; for _ in pairs(onlineUids) do onlineCount = onlineCount + 1 end
+    local protectedCount, palsWritten = 0, 0
+    for _, r in ipairs(report) do
+        if r.protected then protectedCount = protectedCount + 1; palsWritten = palsWritten + (r.pals or 0) end
+    end
+    log("HEARTBEAT sweep=%d uptime=%ds guilds=%d camps=%d online=%d protected=%d pals_written=%d write_errors=%d",
+        sweepCount, t - startedAt, #guilds, #allCamps, onlineCount, protectedCount, palsWritten, writeErrors)
 
     -- Explicit per-guild decision record. This is the evidence for per-guild
     -- isolation: every guild the sweep considered is named along with whether it
@@ -761,12 +832,25 @@ local function sweep()
     end
 
     if CFG.status_file then
-        local lines = { string.format('{"version":"%s","mode":"%s","dry_run":%s,"guilds":[',
-            MOD_VERSION, tostring(CFG.mode), tostring(CFG.dry_run and true or false)) }
+        local function num(v) if type(v) == "number" then return string.format("%.4f", v) end return "null" end
+        local lines = { string.format(
+            '{"version":%q,"mode":%q,"dry_run":%s,"sanity_mode":%q,"stop_work":%s,' ..
+            '"sweep":%d,"uptime_s":%d,"generated_epoch":%d,"write_errors":%d,' ..
+            '"guild_count":%d,"camp_count":%d,"players_online":%d,"guilds":[',
+            MOD_VERSION, tostring(CFG.mode), tostring(CFG.dry_run and true or false),
+            tostring(CFG.sanity_mode), tostring(CFG.stop_work_when_offline and true or false),
+            sweepCount, t - startedAt, t, writeErrors,
+            #guilds, #allCamps, (function() local n=0; for _ in pairs(onlineUids) do n=n+1 end; return n end)()) }
         for i, r in ipairs(report) do
-            lines[#lines + 1] = string.format('%s{"id":"%s","name":%q,"protected":%s,"pals":%d,"reason":%q}',
-                i > 1 and "," or "", r.id, r.name or "", tostring(r.protected and true or false),
-                r.pals or 0, r.reason or "")
+            local s = r.stat
+            lines[#lines + 1] = string.format(
+                '%s{"id":%q,"name":%q,"protected":%s,"camps":%d,"pals":%d,"offline_s":%d,"reason":%q,' ..
+                '"decay_zero":%d,"decay_nonzero":%d,"min_san":%s,"min_stomach_pct":%s,"sick":%d}',
+                i > 1 and "," or "", r.id, r.name or "",
+                tostring(r.protected and true or false),
+                r.camps or 0, r.pals or 0, math.floor(r.offlineFor or 0), r.reason or "",
+                s and s.decayZero or 0, s and s.decayOther or 0,
+                num(s and s.minSan), num(s and s.minStomachPct), s and s.sick or 0)
         end
         lines[#lines + 1] = "]}"
         local body = table.concat(lines)
@@ -936,6 +1020,153 @@ local function checkServerSettings()
 end
 
 --------------------------------------------------------------------------------
+-- Admin commands
+--
+-- Two transports, because neither is guaranteed on a headless rented server:
+--
+--   1. UE console  -- RegisterConsoleCommandHandler. Works if the host's console
+--      reaches UE's exec layer. Unproven on Palworld dedicated, so it is wrapped
+--      and failure is logged, never fatal.
+--   2. A command FILE -- polled every sweep. Write a line into
+--      ue4ss/Mods/GuildStasis/command.txt (panel file editor or SFTP) and the
+--      reply lands in command-out.txt. Slower but works absolutely everywhere.
+--
+-- Commands (same syntax either way):
+--   status              one-line health summary
+--   guilds              every guild, its verdict and pal counts
+--   pals <idprefix>     per-pal detail for one guild
+--   suppress <idprefix> force this guild suppressed now, ignoring presence/grace
+--   release <idprefix>  force this guild un-suppressed and clear the override
+--   auto <idprefix>     drop the override, return to automatic behaviour
+--   sweep               run a sweep immediately
+--   help
+--------------------------------------------------------------------------------
+
+local cmdOutPath = nil   -- set at startup if the command file is in use
+
+local function cmdReply(lines)
+    for _, l in ipairs(lines) do log("CMD| %s", l) end
+    if cmdOutPath then
+        local f = io.open(cmdOutPath, "w")
+        if f then
+            f:write("# GuildStasis reply " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n")
+            for _, l in ipairs(lines) do f:write(l .. "\n") end
+            f:close()
+        end
+    end
+end
+
+local function findGuildByPrefix(prefix)
+    if prefix == nil or prefix == "" then return nil, "no guild id given" end
+    local want = prefix:upper():gsub("-", "")
+    local hits = {}
+    for _, g in ipairs(enumerateGuilds()) do
+        local flat = g.id:gsub("-", "")
+        if flat:sub(1, #want) == want then hits[#hits + 1] = g end
+    end
+    if #hits == 0 then return nil, "no guild id starts with '" .. prefix .. "'" end
+    if #hits > 1 then return nil, ("'%s' is ambiguous (%d guilds match)"):format(prefix, #hits) end
+    return hits[1], nil
+end
+
+local runSweepNow   -- forward declaration; assigned after sweep() exists
+
+local function handleCommand(raw)
+    local line = (raw or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if line == "" then return end
+    local verb, rest = line:match("^(%S+)%s*(.*)$")
+    verb = (verb or ""):lower()
+
+    if verb == "help" then
+        cmdReply({
+            "commands: status | guilds | pals <idprefix> | suppress <idprefix> |",
+            "          release <idprefix> | auto <idprefix> | sweep | help",
+        })
+
+    elseif verb == "status" then
+        local online = 0; for _ in pairs(onlineUids) do online = online + 1 end
+        local prot = 0
+        for _, st in pairs(guildState) do if st.suppressed then prot = prot + 1 end end
+        local ov = 0; for _ in pairs(manualOverride) do ov = ov + 1 end
+        cmdReply({
+            ("v%s mode=%s dry_run=%s sanity=%s"):format(MOD_VERSION, tostring(CFG.mode),
+                tostring(CFG.dry_run), tostring(CFG.sanity_mode)),
+            ("sweeps=%d uptime=%ds writeErrors=%d"):format(sweepCount, os.time() - startedAt, writeErrors),
+            ("playersOnline=%d guildsSuppressed=%d manualOverrides=%d"):format(online, prot, ov),
+        })
+
+    elseif verb == "guilds" then
+        local out = {}
+        local camps = collectBaseCamps()
+        for _, g in ipairs(enumerateGuilds()) do
+            local st = guildState[g.id] or {}
+            local allOff, why = guildAllOffline(g)
+            local n = 0
+            for _, c in ipairs(camps) do if c.group == g.id then n = n + 1 end end
+            out[#out + 1] = ("%s  %-24s camps=%d members=%d allOffline=%s suppressed=%s override=%s%s")
+                :format(g.id:sub(1, 8), (g.name or "?"):sub(1, 24), n, #g.members,
+                        tostring(allOff), tostring(st.suppressed == true),
+                        tostring(manualOverride[g.id] or "auto"),
+                        why and ("  (" .. why .. ")") or "")
+        end
+        if #out == 0 then out = { "no guilds found" } end
+        cmdReply(out)
+
+    elseif verb == "pals" then
+        local g, err = findGuildByPrefix(rest)
+        if not g then cmdReply({ err }); return end
+        local out = { ("guild %s  %s"):format(g.id, g.name or "?") }
+        local camps = collectBaseCamps()
+        forEachGuildPal(g, camps, function(param, label)
+            local s = palSnapshot(param)
+            out[#out + 1] = ("  %s  %s"):format(label, fmtSnapshot(s))
+        end)
+        if #out == 1 then out[#out + 1] = "  (no pals found)" end
+        cmdReply(out)
+
+    elseif verb == "suppress" or verb == "release" or verb == "auto" then
+        local g, err = findGuildByPrefix(rest)
+        if not g then cmdReply({ err }); return end
+        if verb == "auto" then
+            manualOverride[g.id] = nil
+            cmdReply({ ("%s (%s) -> automatic"):format(g.id:sub(1, 8), g.name or "?") })
+        else
+            manualOverride[g.id] = verb
+            cmdReply({ ("%s (%s) -> forced %s; applies on the next sweep")
+                :format(g.id:sub(1, 8), g.name or "?", verb) })
+        end
+        if runSweepNow then runSweepNow() end
+
+    elseif verb == "sweep" then
+        cmdReply({ "running a sweep now" })
+        if runSweepNow then runSweepNow() else cmdReply({ "sweep not available yet" }) end
+
+    else
+        cmdReply({ ("unknown command '%s' -- try 'help'"):format(verb) })
+    end
+end
+
+-- Poll the command file. Consumed by truncating it, so a command runs once.
+local cmdInPath = nil
+local function pollCommandFile()
+    if not cmdInPath then return end
+    local f = io.open(cmdInPath, "r")
+    if not f then return end
+    local body = f:read("*a") or ""
+    f:close()
+    if body:gsub("%s", "") == "" then return end
+    -- clear immediately so a slow command cannot run twice
+    local w = io.open(cmdInPath, "w"); if w then w:write("") ; w:close() end
+    for line in body:gmatch("[^\r\n]+") do
+        if line:sub(1, 1) ~= "#" then
+            log("CMD< %s", line)
+            local ok, err = pcall(handleCommand, line)
+            if not ok then cmdReply({ "command error: " .. tostring(err) }) end
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Scheduling -- chained one-shot delays. Never LoopAsync (Rule 4).
 --------------------------------------------------------------------------------
 
@@ -945,11 +1176,69 @@ local function scheduleSweep()
     if stopped then return end
     ExecuteWithDelay(CFG.sweep_interval_ms or 30000, function()
         ExecuteInGameThread(function()
+            -- Commands first, so 'suppress X' takes effect on this same sweep.
+            local okc, errc = pcall(pollCommandFile)
+            if not okc then log("command poll error: %s", tostring(errc)) end
             local ok, err = pcall(sweep)
             if not ok then log("sweep error: %s", tostring(err)) end
         end)
         scheduleSweep()
     end)
+end
+
+-- Now that sweep() exists, let commands trigger one immediately.
+runSweepNow = function()
+    ExecuteInGameThread(function()
+        local ok, err = pcall(sweep)
+        if not ok then log("commanded sweep error: %s", tostring(err)) end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- Command transports
+--------------------------------------------------------------------------------
+
+local function setupCommands()
+    -- File channel. Paths are relative to the server's working directory, which is
+    -- Pal/Binaries/Win64 (verified: ../../../Pal/Saved resolves from there).
+    local base = "ue4ss/Mods/GuildStasis/"
+    cmdInPath  = base .. "command.txt"
+    cmdOutPath = base .. "command-out.txt"
+    -- Create the input file so it is obvious where to type, and so the first poll
+    -- does not have to distinguish "missing" from "empty".
+    local f = io.open(cmdInPath, "a")
+    if f then
+        f:close()
+        log("command file ready: <serverdir>/Pal/Binaries/Win64/%s", cmdInPath)
+        log("  write a line into it (e.g. 'status'), reply appears in %s", cmdOutPath)
+    else
+        cmdInPath, cmdOutPath = nil, nil
+        log("WARN: could not open %s -- file commands unavailable", base .. "command.txt")
+    end
+
+    -- UE console channel. Unproven on a headless Palworld dedicated server, so
+    -- every registration is individually guarded and failure is only logged.
+    local verbs = { "status", "guilds", "pals", "suppress", "release", "auto", "sweep", "help" }
+    local registered, failed = 0, 0
+    for _, v in ipairs(verbs) do
+        local name = "stasis." .. v
+        local ok = try(function()
+            RegisterConsoleCommandHandler(name, function(fullCommand, params, outputDevice)
+                local rest = table.concat(params or {}, " ")
+                local okc, errc = pcall(handleCommand, v .. " " .. rest)
+                if not okc then log("console command error: %s", tostring(errc)) end
+                return true   -- we handled it; stop UE looking further
+            end)
+            return true
+        end)
+        if ok then registered = registered + 1 else failed = failed + 1 end
+    end
+    if registered > 0 then
+        log("console commands registered: %d (try 'stasis.status' in the server console)", registered)
+    end
+    if failed > 0 then
+        log("console command registration failed for %d verb(s) -- use the command file instead", failed)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -988,6 +1277,7 @@ ExecuteWithDelay(20000, function()
     ExecuteInGameThread(function()
         local ok, err = pcall(function()
             checkServerSettings()
+            setupCommands()
             recon()
             probeWrites()
         end)
