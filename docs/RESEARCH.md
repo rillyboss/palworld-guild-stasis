@@ -217,6 +217,46 @@ Prefer `GetContainer` over `TryGetContainer`: the latter returns its container t
 - `EPalBaseCampWorkerDirectorState { Init, WaitForLoadingAround, Active }` is the `State` property's enum. It is a **lifecycle**, not a work policy. Writing it would repeat the `CurrentOrderType` mistake.
 - Other enums seen: `EPalBaseCampWorkerWalkAroundState { WalkAround, Rest }`.
 
+#### Why suppression cannot be fully event-driven
+
+The server visibly knows when a player leaves -- its console prints
+
+```
+[LOG] U2short1 joined the server. (User id: steam_..., Player id: ...)
+[LOG] U2short1 left the server. (User id: steam_...)
+```
+
+so "why poll at all?" is a fair question. Three routes were checked and all are closed:
+
+| Route | Result |
+|---|---|
+| A reflected logout UFunction | None. The format strings `%s %s left the server. (User id: %s)` / `MESSAGE_DS_LEFT_PLAYER` sit immediately beside `APalGameMode::PreLogin` and `APalGameMode::RespawnPlayer`, so they are emitted from `APalGameMode` -- almost certainly its `Logout` override. In Unreal, `AGameModeBase::Logout` and `PostLogin` are plain C++ virtuals, not UFunctions, and UE4SS Lua can only hook UFunctions |
+| Tailing the server log | **`Pal/Saved/Logs` is empty.** Those lines go to the console only; no log file is written, so there is nothing to watch |
+| Candidate event names | `PlayerLogout` is `EPalActionType::PlayerLogout`, an animation. `Logout` is `EPalPlayerAccountState::Logout`, a state value. `OnUpdatePlayerInfoInGuildBelongTo` is a real UFunction but lives on the *player* object, which is being destroyed as they leave |
+
+The asymmetry is the whole story: **login is hookable because `ServerAcknowledgePossession` happens to be an RPC, and therefore reflected. Logout goes through a virtual that is not.**
+
+**And even a perfect logout event would not remove the sweep**, which is the more important point:
+
+1. **Pals appear inside suppressed guilds.** Eggs hatch while nobody is online (`OnMultiHatchedIndividualHandle_ServerInternal` is a real function on the player class). A Pal born after a suppress event would never be suppressed under pure event-driven logic, and would work for free -- exactly the hole v2 exists to close.
+2. **The game rewrites our container.** Observed live: `CraftSpeedRates: 2 entry(s) [Sick=1.0 GuildStasis_Offline=0.0]`. Palworld manages that array itself, so a rebuild on sickness change, level-up or buff recalc could drop our entry. Only re-application detects and repairs it.
+3. **The HEARTBEAT is the only liveness signal.** UE4SS's timer-death bug kills Lua timers after 40min-2h. With a sweep that shows up as the heartbeat stopping; pure event-driven has no such tell, and a dead mod would be indistinguishable from a healthy one until someone logged out and nothing happened.
+4. The grace period needs a timer regardless.
+
+So: **events for latency, polling for correctness.** An event you miss is lost forever; a poll you miss just happens one interval later. If sweep cost ever matters, split it -- cheap presence check often, expensive camp walk only when presence changed or a guild is suppressed -- rather than removing it.
+
+#### Login release latency is up to a full sweep interval, not ~8s
+
+An earlier note in this file claimed the login hook lifted suppression "~8s after login". That was a favourable race. Measured properly:
+
+```
+17:10:02.55  LOGIN HOOK fired
+17:10:02.59  LOGIN HOOK done
+17:10:22.23  unsuppress applied      <- the NEXT scheduled sweep, 20s later
+```
+
+The hook fires on possession, but the guild's `EPalGuildPlayerStatus` flips to `Online` slightly *after* it, so the sweep running inside the hook still sees the player offline and does nothing. Observed in game as 10-15s of idle Pals after logging in. Fixed by queueing follow-up sweeps at 2s/5s/10s/20s from the hook, guarded against stacking because each sweep costs a full `FindAllOf`.
+
 #### CraftSpeedRates zeroes work speed, and does not persist
 
 The v2 stop-work mechanism, verified live with readback and a restart check.
