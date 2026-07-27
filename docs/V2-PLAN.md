@@ -55,11 +55,45 @@ Keeping the distinction straight matters for whoever reads this next: parking is
 
 The cost of this being dead: v2 loses the free SAN regeneration and sickness cure that made the Pal Box so attractive, so the sickness question below reopens.
 
-### The only mechanism left: per-Pal off-work list
+### A fourth candidate, and the best-shaped one: CraftSpeedRates
+
+Found by asking the obvious question nobody had asked -- instead of stopping the work, set the work *speed* to zero.
+
+`FPalIndividualCharacterSaveParameter` holds three sibling `FFloatContainer`s, confirmed by enumerating the struct at runtime:
+
+```
+DecreaseFullStomachRates    <- v1 writes this, in production, verified
+AffectSanityRates
+CraftSpeedRates             <- work speed
+FloatContainer         { Values : TArray<FloatContainer_FloatPair> }
+FloatContainer_FloatPair { Key : FName, Value : float }
+```
+
+Why this shape is so much better than the other three candidates:
+
+- **It is the same container type as the one lever already proven in production.** `SetDecreaseFullStomachRates(FName, 0.0)` is a verified hard stop: the container does not sum or average, a `0.0` entry wins outright.
+- **Its sibling's entries do not persist.** After save + restart the hunger rate read `1.0` again. If `CraftSpeedRates` behaves the same, work-speed-zero needs no restore map, no fingerprint, no disk state, and **keeps v1's "nothing persists to the save" guarantee** -- the single biggest risk in every other candidate simply disappears.
+- **It touches no player configuration**, so it has none of the off-work list's silent-loss failure mode.
+- Keyed by our own FName, so it composes with vanilla and removes cleanly.
+
+Confirmed reachable: `sp.CraftSpeedRates` resolves, `.Values` is a real array, and craft speed is readable through several getters (`GetCraftSpeed` = 70, `GetCraftSpeedByWorkSuitability(Handcraft)` = 50) which gives an unambiguous before/after oracle.
+
+**The open problem.** There is no `SetCraftSpeedRates` UFunction -- the class exposes a setter and remover for the hunger container only, verified by enumerating every function on it. So an entry has to be added by writing the array directly, and `Values` is normally **empty** (entries exist only while something is applying a rate), which means an append rather than a mutate. Whether UE4SS Lua can grow a TArray of structs is unproven.
+
+Two questions, in order, and the second only matters if the first succeeds:
+
+1. Can an entry be added at all?
+2. Does a `0.0` entry actually zero work speed, or is `CraftSpeedRates` merely a reporting cache that the game recomputes?
+
+`tools/probe/v2-workspeed.lua` tests both, and reads craft speed back rather than trusting the write.
+
+### The fallback: per-Pal off-work list
 
 Appending every `EPalWorkSuitability` (1-13) to each Pal's `OffWorkSuitabilityList`, via `SaveParameter.WorkSuitabilityPreference*`, proving the member with a real `GetArrayNum()` before touching it. Partly implemented already behind `stop_work_when_offline`, with restore deliberately refusing rather than guessing.
 
-It is the last candidate standing, not a good one. Be honest about that before building on it:
+**Now reachable, after a real bug fix.** `main.lua` guessed three names for the member holding this list and all three were wrong; the actual member is `WorkSuitabilityOptionInfo`, read out of the save-parameter struct. With the correct name, `sp.WorkSuitabilityOptionInfo.OffWorkSuitabilityList` resolves as a real array. So this path could never have worked before, independently of its other problems -- which also means `stop_work_when_offline` has never actually been exercised.
+
+It is a fallback, not a good option. Be honest about that before building on it:
 
 - **Its failure mode is the silent one.** The list encodes player decisions about which Pal may do which job. A bad restore loses that configuration invisibly, and it looks like the player's own settings rather than a bug. Compare the two mechanisms now ruled out: a wrong `CurrentOrderType` is visible (the base is fighting), and a failed un-park is visible (the Pals are in the box). This one is not.
 - **Restore needs a fingerprint map persisted to disk**, because `FPalInstanceID` is reassigned across restarts. Anchor: `CharacterID | Talent_HP | Talent_Shot | Talent_Defense | Gender`, all persisted and immutable. Identical bred twins are genuinely ambiguous and must be **skipped rather than guessed** -- unlike the parking case, where ambiguity would have been harmless, here a wrong match silently rewrites the wrong Pal's config.
@@ -157,13 +191,14 @@ Three candidate mechanisms for Feature 1 have been eliminated on evidence, none 
 
 | Mechanism | Verdict | Basis |
 |---|---|---|
-| `CurrentOrderType` | wrong thing entirely -- a battle order, and it persists | binary enum + `OrderCommand(OrderType)` signature |
-| Pal Box parking | no reflected mutator exists; forcing it risks losing Pals | full class-chain enumeration at runtime |
-| `OffWorkSuitabilityList` | last one standing, silent failure mode, unproven that it stops output | partly implemented, needs M7 + M10 |
+| `CurrentOrderType` | dead. Wrong thing entirely -- a battle order, and it persists | binary enum + `OrderCommand(OrderType)` signature |
+| Pal Box parking | dead. No reflected mutator exists; forcing it risks losing Pals | full class-chain enumeration at runtime |
+| **`CraftSpeedRates`** | **best candidate.** Same container type as v1's proven lever, and probably non-persistent | struct enumerated; append + effect both unproven |
+| `OffWorkSuitabilityList` | fallback. Now reachable after a name fix, but silent failure mode | `WorkSuitabilityOptionInfo` confirmed real |
 
 Feature 2 went the other way: it is probably unnecessary, and if it is needed the hook to build it on now exists.
 
-The next concrete step is **not** production code. It is M7 + M10 behind `stop_work_when_offline` on a throwaway server, to find out whether the last remaining mechanism actually zeroes output. Everything else depends on that answer.
+The next concrete step is **not** production code. It is `tools/probe/v2-workspeed.lua`, which asks whether an entry can be added to `CraftSpeedRates` and whether a `0.0` entry actually zeroes work speed. If yes, v2 gets a mechanism with a smaller blast radius than anything previously considered -- possibly small enough to keep v1's no-persistence guarantee. If no, fall back to M7 + M10 behind `stop_work_when_offline`.
 
 ## The sickness question, reopened
 

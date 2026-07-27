@@ -564,7 +564,13 @@ end
 
 local WORK_SUITABILITIES = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 }
 
+-- The first name is the REAL one, read out of the retail binary's property block
+-- for FPalIndividualCharacterSaveParameter (it sits beside CurrentWorkSuitability).
+-- The three below it were guesses, and all three were wrong -- which means this
+-- whole path could never have worked, independently of its other problems. Kept
+-- only as fallbacks in case a patch renames the member.
 local PREF_MEMBER_NAMES = {
+    "WorkSuitabilityOptionInfo",
     "WorkSuitabilityPreferenceInfo",
     "WorkSuitabilityPreference",
     "WorkSuitabilityOption",
@@ -1280,12 +1286,19 @@ end
 -- Un-suppress fast on login. This hook is runtime-verified to fire on a live 1.0
 -- dedicated server. It is a nudge only: the sweep is the mechanism, so a missed
 -- hook costs latency, never correctness.
+-- The two markers below are deliberate. A native access violation cannot be caught
+-- by pcall, so if the process dies during a login-triggered sweep the log is the
+-- only evidence of whether our code was even running. "LOGIN HOOK fired" with no
+-- matching "LOGIN HOOK done" means the crash was inside our sweep; neither line
+-- means the crash was somewhere else entirely.
 local hooked = try(function()
     RegisterHook("/Script/Engine.PlayerController:ServerAcknowledgePossession", function()
         ExecuteInGameThread(function()
+            log("LOGIN HOOK fired")
             refreshOnlinePlayers()
             local ok, err = pcall(sweep)
             if not ok then log("login-triggered sweep error: %s", tostring(err)) end
+            log("LOGIN HOOK done")
         end)
     end)
     return true

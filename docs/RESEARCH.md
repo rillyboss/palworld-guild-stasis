@@ -217,6 +217,19 @@ Prefer `GetContainer` over `TryGetContainer`: the latter returns its container t
 - `EPalBaseCampWorkerDirectorState { Init, WaitForLoadingAround, Active }` is the `State` property's enum. It is a **lifecycle**, not a work policy. Writing it would repeat the `CurrentOrderType` mistake.
 - Other enums seen: `EPalBaseCampWorkerWalkAroundState { WalkAround, Rest }`.
 
+#### CheatManagerEnablerMod crashes the dedicated server on login
+
+Three identical crashes inside ten minutes, all `EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000070` with a callstack of nothing but `UE4SS` frames, each one on a player logging in.
+
+Cause: UE4SS's bundled `CheatManagerEnablerMod` was left enabled from the earlier experiment that established `UPalCheatManager` **does not exist in this build**. With no class to instantiate during possession, it dereferences null at a small offset. Disabling it made login clean immediately.
+
+Two lessons worth more than the fix:
+
+- **That experiment should have been reverted when it concluded.** The note above already records that enabling the mod does not conjure the class, so it had no remaining purpose and sat there as a live landmine. Turn diagnostic mods off when you are done with them.
+- **Attributing a native crash by "what logged last" is unreliable.** A probe of ours happened to be mid-run when the third crash landed, and its last log line looked exactly like the culprit. It was a bystander -- the two earlier crashes had the same signature with that probe not even deployed. The reliable method is markers that bracket the suspect code: `LOGIN HOOK fired` with no matching `LOGIN HOOK done` proves the crash was inside our sweep, and both lines present exonerates it. `main.lua` now logs that pair, which is how this mod's login path was cleared.
+
+On a headless server neither `CheatManagerEnablerMod` nor `Keybinds` has any purpose. Ship with them off.
+
 #### Hunger, measured
 
 Read across every container on a live world: every Pal reported `decayRate=1.0` and `disableNaturalUpdate=false` while its guild was online, with `PalStomachDecreaceRate=1.000000` in the ini. Party Pals sat at `100.0/100.0` while a base Pal in the same guild sat at `0.0/100.0`, so decay is real and the difference is food access, not decay rate. Useful as a baseline: **a suppressed Pal must read `decayRate=0.0`, and anything else in a party container is a bug.**
