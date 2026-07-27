@@ -45,9 +45,22 @@ return {
     grace_seconds = 15,
 
     -- Milliseconds between sweeps. Each sweep re-derives all state from live
-    -- objects, so a longer interval only delays reaction, it never desyncs.
-    -- FindAllOf scans the whole UObject array, so do not make this small.
-    sweep_interval_ms = 30000,
+    -- objects, so changing this only changes how fast the mod reacts. It can never
+    -- desync: a missed sweep just happens on the next one.
+    --
+    -- 15s pairs with grace_seconds = 15 to put suppression in place 15-30s after
+    -- the last member leaves. At the old 30s a base was observed producing and
+    -- levelling for a full minute after everyone had gone.
+    --
+    -- THE COST, so this is a deliberate choice and not a surprise: every sweep runs
+    -- FindAllOf over the entire UObject array to collect base camps. Halving the
+    -- interval doubles that. On a 6-guild, 11-camp, 93-Pal server it has not been
+    -- measured as a problem, but it is the one setting here that scales with world
+    -- size rather than guild count. If a large server shows CPU cost, raise this
+    -- first: release latency comes from the login hook, not from the sweep, so a
+    -- longer interval delays suppression arming without making returning players
+    -- wait.
+    sweep_interval_ms = 15000,
 
     -- Milliseconds between refreshes of the cached PlayerController list.
     -- Used to cross-check the guild's own online/offline flags.
