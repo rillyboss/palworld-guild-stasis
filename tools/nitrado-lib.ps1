@@ -162,6 +162,135 @@ function Save-FtpTree {
 }
 
 #-------------------------------------------------------------------------------
+# Multi-host support
+#
+# Migration means talking to TWO hosts, so the config is switchable. Each host
+# gets its own gitignored <name>.config.ps1 alongside this file.
+#-------------------------------------------------------------------------------
+
+function Use-PalHost {
+    param([Parameter(Mandatory)][string]$Name)
+    $path = Join-Path $PSScriptRoot "$Name.config.ps1"
+    if (-not (Test-Path $path)) { throw "No config for host '$Name' (expected $path)." }
+    $cfg = & $path
+    foreach ($k in @('FtpHost','FtpUser','FtpPass','GameRoot')) {
+        if (-not $cfg.ContainsKey($k) -or [string]::IsNullOrWhiteSpace([string]$cfg[$k])) {
+            throw "$Name.config.ps1 is missing '$k'."
+        }
+    }
+    $script:NitradoCfg = $cfg
+    Write-Verbose "Active host: $Name ($($cfg.FtpHost))"
+    return $cfg
+}
+
+#-------------------------------------------------------------------------------
+# Upload
+#-------------------------------------------------------------------------------
+
+function New-FtpDirectory {
+    param([string]$Path)
+    try {
+        Invoke-FtpWithRetry -Retries 2 -What "mkdir /$Path" -Action {
+            $r = New-FtpRequest -Path $Path -Method ([System.Net.WebRequestMethods+Ftp]::MakeDirectory)
+            $resp = $r.GetResponse(); $resp.Close(); return $true
+        } | Out-Null
+    } catch {
+        # 550 here almost always means "already exists", which is fine.
+        if ($_.Exception.Message -notmatch '550') { throw }
+    }
+}
+
+function Send-FtpFile {
+    param([string]$LocalPath, [string]$RemotePath)
+    $bytes = [IO.File]::ReadAllBytes($LocalPath)
+    Invoke-FtpWithRetry -What "upload /$RemotePath" -Action {
+        $r = New-FtpRequest -Path $RemotePath -Method ([System.Net.WebRequestMethods+Ftp]::UploadFile) -TimeoutMs 120000
+        $r.ContentLength = $bytes.Length
+        $s = $r.GetRequestStream()
+        try { $s.Write($bytes, 0, $bytes.Length) } finally { $s.Close() }
+        $resp = $r.GetResponse(); $resp.Close(); return $true
+    } | Out-Null
+    # Verify by reading the size back off the server, not by trusting the write.
+    $remote = Get-FtpFileSize -Path $RemotePath
+    return [pscustomobject]@{
+        LocalPath = $LocalPath; RemotePath = $RemotePath
+        LocalSize = $bytes.Length; RemoteSize = $remote
+        Ok = ($remote -eq $bytes.Length)
+    }
+}
+
+# Recursive upload. Creates directories as needed and verifies every file's size
+# on the far side.
+function Send-FtpTree {
+    param([string]$LocalRoot, [string]$RemoteRoot, [string[]]$ExcludeDirs = @())
+    $results = @()
+    New-FtpDirectory -Path $RemoteRoot
+    foreach ($item in (Get-ChildItem $LocalRoot -Force)) {
+        if ($item.PSIsContainer) {
+            if ($ExcludeDirs -contains $item.Name) { continue }
+            $results += Send-FtpTree -LocalRoot $item.FullName `
+                                     -RemoteRoot ("$RemoteRoot/$($item.Name)") `
+                                     -ExcludeDirs $ExcludeDirs
+        } else {
+            try   { $results += Send-FtpFile -LocalPath $item.FullName -RemotePath "$RemoteRoot/$($item.Name)" }
+            catch { $results += [pscustomobject]@{ LocalPath=$item.FullName; RemotePath="$RemoteRoot/$($item.Name)"
+                                                   LocalSize=$item.Length; RemoteSize=-1; Ok=$false; Error=$_.Exception.Message } }
+        }
+    }
+    return $results
+}
+
+# Is this host usable for the mod at all? The single most important pre-flight
+# check: UE4SS has to live in Pal/Binaries/Win64, so that path must be writable.
+function Test-PalHostModCapable {
+    param([switch]$Quiet)
+    $c = Get-NitradoConfig
+    $report = [pscustomobject]@{
+        FtpHost = $c.FtpHost; Win64Listable = $false; Win64Writable = $false
+        SavedListable = $false; WindowsBuild = $false; Notes = @()
+    }
+    $win64 = "$($c.GameRoot)/Pal/Binaries/Win64"
+
+    $kids = Get-FtpChildren -Path $win64 -Quiet
+    if ($kids -and $kids.Count -gt 0) {
+        $report.Win64Listable = $true
+        if ($kids | Where-Object { $_.Name -match 'PalServer-Win64-Shipping' }) {
+            $report.WindowsBuild = $true
+            $report.Notes += 'PalServer-Win64-Shipping present -- Windows build confirmed'
+        }
+    } else { $report.Notes += "cannot list $win64" }
+
+    if (Get-FtpChildren -Path "$($c.GameRoot)/Pal/Saved" -Quiet) { $report.SavedListable = $true }
+
+    # Write test with a throwaway file, then clean up.
+    if ($report.Win64Listable) {
+        $probe = "$win64/.palhost-write-test"
+        $tmp = [IO.Path]::GetTempFileName()
+        try {
+            'write test' | Out-File $tmp -Encoding ascii
+            $r = Send-FtpFile -LocalPath $tmp -RemotePath $probe
+            $report.Win64Writable = $r.Ok
+            try {
+                Invoke-FtpWithRetry -Retries 2 -What 'delete probe' -Action {
+                    $d = New-FtpRequest -Path $probe -Method ([System.Net.WebRequestMethods+Ftp]::DeleteFile)
+                    $resp = $d.GetResponse(); $resp.Close(); return $true
+                } | Out-Null
+            } catch { $report.Notes += 'left behind .palhost-write-test -- delete it manually' }
+        } catch { $report.Notes += "write test failed: $($_.Exception.Message)" }
+        finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    }
+    if (-not $Quiet) {
+        Write-Host "  host          : $($report.FtpHost)"
+        Write-Host "  Win64 listable: $($report.Win64Listable)"
+        Write-Host "  Win64 writable: $($report.Win64Writable)"
+        Write-Host "  Windows build : $($report.WindowsBuild)"
+        Write-Host "  Saved listable: $($report.SavedListable)"
+        $report.Notes | ForEach-Object { Write-Host "  note          : $_" }
+    }
+    return $report
+}
+
+#-------------------------------------------------------------------------------
 # Save-file integrity
 #
 # Comparing a downloaded file against the size from an earlier directory listing

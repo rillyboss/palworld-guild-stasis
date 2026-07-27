@@ -38,5 +38,7 @@ desktop.ini
 .idea/
 
 # Nitrado credentials and captured backups - never commit
-tools/nitrado.config.ps1
+tools/*.config.ps1
+!tools/*.config.ps1.example
 backups/
+tools/*.config.ps1.bak

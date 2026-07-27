@@ -1,0 +1,24 @@
+<#
+  Copy to nitrado.config.ps1 (gitignored) and fill in.
+
+  Nitrado's FTP is PLAIN FTP on port 21, so these credentials cross the network
+  unencrypted. Treat them as low-trust: rotate them if they are ever pasted into
+  a chat, a ticket, or a log.
+
+  The REST AdminPassword is the ONLY credential on an internet-facing API whose
+  surface includes /shutdown, /kick and /ban. Use something long and unique.
+#>
+@{
+    # FTP (Nitrado panel -> FTP details)
+    FtpHost = 'your-bisect-ftp-host'
+    FtpUser = 'your-bisect-ftp-user'
+    FtpPass = 'CHANGEME'
+
+    # Root of the exposed game tree. On Nitrado this is 'palworld' and only
+    # Pal/Saved beneath it is actually accessible.
+    GameRoot = 'palworld'
+
+    # Palworld REST API: http://<server ip>:<RESTAPIPort>
+    RestBase      = 'http://X.X.X.X:17143'
+    AdminPassword = 'CHANGEME'
+}
