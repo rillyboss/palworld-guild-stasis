@@ -1,0 +1,26 @@
+{
+  "ModName": "Guild Stasis",
+  "PackageName": "GuildStasis",
+  "Thumbnail": "thumbnail.png",
+  "Version": "0.1.0",
+  "DebugMode": true,
+  "MinRevision": null,
+  "Author": "",
+  "Dependencies": [
+    "UE4SS"
+  ],
+  "Tags": [
+    "UE4SS",
+    "Gameplay"
+  ],
+  "InstallRule": [
+    {
+      "Type": "Lua",
+      "IsServer": true,
+      "Targets": [
+        "./Scripts",
+        "./enabled.txt"
+      ]
+    }
+  ]
+}

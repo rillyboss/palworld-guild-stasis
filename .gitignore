@@ -1,0 +1,38 @@
+# UE4SS is separately licensed and large - never vendor it here
+ue4ss/
+dwmapi.dll
+UE4SS*.zip
+
+# Logs and captured server output
+*.log
+*.log.*
+UE4SS.log*
+
+# Local server artifacts
+Pal/Saved/
+*.sav
+*.sav.bak
+PalWorldSettings.ini
+PalWorldSettings.ini.*
+PalModSettings.ini
+PalModSettings.ini.*
+GameUserSettings.ini
+
+# Loader-generated
+ManagedMods/
+InstallManifest.json
+mods.txt
+mods.json
+
+# Scratch
+scratch/
+tmp/
+*.tmp
+thumbnail.png
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
