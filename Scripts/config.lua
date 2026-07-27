@@ -48,19 +48,25 @@ return {
     -- objects, so changing this only changes how fast the mod reacts. It can never
     -- desync: a missed sweep just happens on the next one.
     --
-    -- 15s pairs with grace_seconds = 15 to put suppression in place 15-30s after
-    -- the last member leaves. At the old 30s a base was observed producing and
-    -- levelling for a full minute after everyone had gone.
+    -- WHAT A SWEEP COSTS, because this is the setting that decides server load:
+    -- one FindAllOf over the entire UObject array to collect base camps, plus a
+    -- read-write-verify on every Pal of every suppressed guild. On a 6-guild,
+    -- 11-camp, 100-Pal server that is roughly 300 reflected writes per sweep. The
+    -- FindAllOf scales with WORLD size, not guild count, so it is the part that grows
+    -- as players build.
     --
-    -- THE COST, so this is a deliberate choice and not a surprise: every sweep runs
-    -- FindAllOf over the entire UObject array to collect base camps. Halving the
-    -- interval doubles that. On a 6-guild, 11-camp, 93-Pal server it has not been
-    -- measured as a problem, but it is the one setting here that scales with world
-    -- size rather than guild count. If a large server shows CPU cost, raise this
-    -- first: release latency comes from the login hook, not from the sweep, so a
-    -- longer interval delays suppression arming without making returning players
-    -- wait.
-    sweep_interval_ms = 15000,
+    -- 60s is chosen to keep that cost low. Neither direction of latency suffers much
+    -- for it:
+    --   * release, on login, does not wait for a sweep at all. The login hook fires
+    --     and queues its own follow-ups at 2/5/10/20s.
+    --   * suppression arms at grace_seconds after a guild is seen going offline,
+    --     because the sweep that notices schedules one follow-up at the deadline.
+    --
+    -- So the worst case for suppression is sweep_interval + grace_seconds (about 75s
+    -- at these defaults), not sweep_interval * 2. Without that follow-up it WOULD be
+    -- interval * 2, because the sweep that notices a guild went offline cannot also
+    -- suppress it: offlineFor is 0 at that instant and the grace check fails.
+    sweep_interval_ms = 60000,
 
     -- Milliseconds between refreshes of the cached PlayerController list.
     -- Used to cross-check the guild's own online/offline flags.

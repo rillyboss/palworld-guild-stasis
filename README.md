@@ -145,7 +145,7 @@ Runtime changes do not survive a restart. Edit `config.lua` for that.
 | `mode` | `"run"` | `"run"` acts on offline guilds. `"recon"` is fully read-only, enumerating guilds, camps and Pals and logging everything while writing nothing. Use `"recon"` the first time you deploy to an unfamiliar server. |
 | `dry_run` | `false` | With `true`, the mod makes every decision and logs exactly what it would write, but performs no writes. A safer first step than `"recon"`, because it also exercises the state machine. |
 | `grace_seconds` | `15` | Seconds after the **last** guild member logs out before suppression is armed. Short is better here. The delay only avoids churn on brief disconnects, and it is not an anti-exploit measure, since freezing an offline guild's hunger is the entire point. At `60` a base was observed producing and levelling for a full minute after the last member left. `0` suppresses at the first sweep after a guild goes offline. |
-| `sweep_interval_ms` | `15000` | Milliseconds between sweeps. Each sweep re-derives all state from live objects, so this only changes how fast the mod reacts and can never desynchronise. Paired with `grace_seconds = 15`, suppression lands 15 to 30 seconds after the last member leaves. The cost is that every sweep runs `FindAllOf` over the entire UObject array, which is the one setting here that scales with world size rather than guild count. If a large server shows CPU cost, raise this first: release latency comes from the login hook rather than the sweep, so a longer interval delays suppression arming without making returning players wait. |
+| `sweep_interval_ms` | `60000` | Milliseconds between sweeps, and the setting that decides server load. See [What a sweep costs](#what-a-sweep-costs). Raising it does not delay release, which comes from the login hook, and only pushes out suppression by the same amount. Lowering it buys very little, because suppression already arms on a scheduled follow-up at the grace deadline rather than on the next interval. |
 | `controller_refresh_ms` | `5000` | How often the cached `PlayerController` list is refreshed. Used to cross-check each guild's own online/offline flags, so a stale flag cannot cause a wrong decision. |
 
 ### What gets suppressed
@@ -190,6 +190,28 @@ A sweep every 30 seconds:
 4. On login, reverse all three
 
 State is recomputed from live objects every sweep and applied idempotently, so it self-heals after a restart and nothing is keyed on Pal instance IDs, which are reassigned across restarts.
+
+### What a sweep costs
+
+One sweep does two things that scale differently:
+
+- **One `FindAllOf("PalBaseCampModel")`**, which walks the entire UObject array. This scales with the size of the *world*, not the number of guilds, so it grows as players build.
+- **A read, write and verify on every Pal of every suppressed guild.** On a 6-guild, 11-camp, 100-Pal server that is roughly 300 reflected writes per sweep.
+
+At the default 60 seconds that is a background cost nobody notices. It is the one setting worth tuning if a large server shows CPU load, and raising it is close to free because of how the two latencies actually work.
+
+### How fast it reacts
+
+Release does not wait for a sweep. The login hook fires on possession and queues follow-up sweeps at 2, 5, 10 and 20 seconds, because the guild's own status flag flips slightly after possession and the hook's immediate sweep would otherwise see the player as still offline.
+
+Suppression is the direction with a subtlety. The sweep that *notices* a guild has gone offline cannot suppress it, because at that instant the guild has been offline for zero seconds and the grace check fails. Left alone, suppression would land on the *next* sweep, making the worst case `sweep_interval * 2`, which is two minutes at the default. So the noticing sweep schedules one follow-up at the grace deadline instead:
+
+```
+worst case = sweep_interval + grace_seconds     about 75s at the defaults
+best case  = grace_seconds                      if the logout lands just before a sweep
+```
+
+That is why lowering `sweep_interval_ms` buys much less than it looks like it should, and why raising it is cheap.
 
 Camps are found with `FindAllOf("PalBaseCampModel")` and matched on the camp's own `GetGroupIdBelongTo()`. That ownership check is the per-guild guarantee: a camp that does not claim this guild is never touched.
 

@@ -756,6 +756,18 @@ local writeErrors  = 0
 -- mid-sweep.
 local manualOverride = {}
 
+-- Assigned for real once sweep() exists, further down. Declared here because sweep()
+-- calls it and a Lua local declared later is simply not in scope there.
+--
+-- Why it exists: the sweep that NOTICES a guild has gone offline cannot suppress it,
+-- because offlineFor is 0 at that moment and the grace check fails. Suppression
+-- therefore needs a second sweep, which makes the worst-case delay
+-- sweep_interval + sweep_interval rather than sweep_interval + grace. At a 60s
+-- interval that is two minutes. One scheduled follow-up at the grace deadline brings
+-- it back to sweep_interval + grace without polling faster, which is the same trade
+-- the login hook's retries make.
+local scheduleGraceSweep = function() end
+
 local function palRatio(v, maxv)
     if type(v) ~= "number" or type(maxv) ~= "number" or maxv <= 0 then return nil end
     return v / maxv
@@ -830,6 +842,8 @@ local function sweep()
                 st.offlineSince = t
                 log("guild '%s' (%s) went fully offline; grace %ds before suppression",
                     guild.name, guild.id, CFG.grace_seconds or 60)
+                -- Arm at the grace deadline instead of waiting for the next interval.
+                scheduleGraceSweep()
             end
 
             local offlineFor = t - st.offlineSince
@@ -1316,6 +1330,27 @@ runSweepNow = function()
     ExecuteInGameThread(function()
         local ok, err = pcall(sweep)
         if not ok then log("commanded sweep error: %s", tostring(err)) end
+    end)
+end
+
+-- One extra sweep at the grace deadline, so a guild is suppressed grace_seconds after
+-- it went offline rather than on whichever scheduled sweep happens next.
+--
+-- Guarded, because several guilds can go offline in the same sweep and one follow-up
+-- covers all of them: a sweep is global, not per-guild. A second of margin is added so
+-- the follow-up lands just past the deadline rather than exactly on it.
+local graceSweepPending = false
+
+scheduleGraceSweep = function()
+    if graceSweepPending then return end
+    graceSweepPending = true
+    local delay = ((CFG.grace_seconds or 60) * 1000) + 1000
+    ExecuteWithDelay(delay, function()
+        ExecuteInGameThread(function()
+            graceSweepPending = false
+            local ok, err = pcall(sweep)
+            if not ok then log("grace sweep error: %s", tostring(err)) end
+        end)
     end)
 end
 
