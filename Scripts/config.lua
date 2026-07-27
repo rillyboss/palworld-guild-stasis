@@ -29,19 +29,44 @@ return {
     -- want. Every write is idempotent and reversed on login, so even needless
     -- churn is harmless.
     --
-    -- Practical floor: suppression can only be applied on a sweep, so anything
-    -- below sweep_interval_ms buys you nothing. With the default 30s sweep, 60
-    -- means protection lands within about two sweeps of the last logout.
+    -- Granularity note: suppression can only be applied on a sweep, so the real
+    -- resolution is sweep_interval_ms, not this value. With the default 30s sweep,
+    -- 15 means protection lands on the first sweep at least 15s after the last
+    -- logout -- so somewhere between 15s and 45s in practice.
+    --
+    -- Why 15 and not 60: at 60 a base keeps producing and levelling for a minute
+    -- or more after the last member leaves, which was observed in testing (a pal
+    -- levelled up during the grace window). Since every write is idempotent and
+    -- reversed on login, arming sooner costs nothing.
     --
     -- Set 0 to suppress at the first sweep after a guild goes offline.
     -- Changeable at runtime with 'stasis.grace <seconds>' (does not persist across
     -- a restart -- edit this file for that).
-    grace_seconds = 60,
+    grace_seconds = 15,
 
     -- Milliseconds between sweeps. Each sweep re-derives all state from live
-    -- objects, so a longer interval only delays reaction, it never desyncs.
-    -- FindAllOf scans the whole UObject array, so do not make this small.
-    sweep_interval_ms = 30000,
+    -- objects, so changing this only changes how fast the mod reacts. It can never
+    -- desync: a missed sweep just happens on the next one.
+    --
+    -- WHAT A SWEEP COSTS, because this is the setting that decides server load:
+    -- one FindAllOf over the entire UObject array to collect base camps, plus a
+    -- read-write-verify on every Pal of every suppressed guild. On a 6-guild,
+    -- 11-camp, 100-Pal server that is roughly 300 reflected writes per sweep. The
+    -- FindAllOf scales with WORLD size, not guild count, so it is the part that grows
+    -- as players build.
+    --
+    -- 60s is chosen to keep that cost low. Neither direction of latency suffers much
+    -- for it:
+    --   * release, on login, does not wait for a sweep at all. The login hook fires
+    --     and queues its own follow-ups at 2/5/10/20s.
+    --   * suppression arms at grace_seconds after a guild is seen going offline,
+    --     because the sweep that notices schedules one follow-up at the deadline.
+    --
+    -- So the worst case for suppression is sweep_interval + grace_seconds (about 75s
+    -- at these defaults), not sweep_interval * 2. Without that follow-up it WOULD be
+    -- interval * 2, because the sweep that notices a guild went offline cannot also
+    -- suppress it: offlineFor is 0 at that instant and the grace check fails.
+    sweep_interval_ms = 60000,
 
     -- Milliseconds between refreshes of the cached PlayerController list.
     -- Used to cross-check the guild's own online/offline flags.
@@ -76,8 +101,35 @@ return {
     topup_once_on_offline = true,
 
     ----------------------------------------------------------------------------
-    -- STOP WORK (experimental -- read this before enabling)
+    -- STOP WORK
     ----------------------------------------------------------------------------
+    -- Set every suppressed pal's effective work speed to zero, so an offline base
+    -- produces nothing. This is what makes stasis mean inert rather than just
+    -- "well fed": without it, an offline guild keeps generating output with no
+    -- upkeep, which is better than being online and backwards.
+    --
+    -- How it works: insert a 0.0 entry under our own FName key into the pal's
+    -- SaveParameter.CraftSpeedRates -- the same container shape, and the same
+    -- "0.0 wins" rule, as the hunger lever above. Verified on a live 1.0 server:
+    -- computed craft speed went 70 -> 0, and the entry does NOT survive a restart.
+    --
+    -- Why it is safe to leave on: nothing persists to the save file. There is no
+    -- restore map, no per-pal fingerprint, and no state on disk. A crash or a
+    -- forced kill mid-suppression self-heals on the next boot, and uninstalling
+    -- the mod leaves no trace. It also touches no player configuration.
+    zero_work_speed = true,
+
+    ----------------------------------------------------------------------------
+    -- STOP WORK, the old route (superseded -- leave this off)
+    ----------------------------------------------------------------------------
+    -- Superseded by zero_work_speed above, which achieves the same goal without
+    -- writing anything persistent. Kept only as a fallback in case a game patch
+    -- breaks the CraftSpeedRates route.
+    --
+    -- Do not enable both. This one writes to the save file, its restore path is
+    -- unimplemented, and its failure mode is silent loss of the player's per-pal
+    -- job configuration.
+    --
     -- Park the guild's pals by adding every work suitability to their vanilla
     -- off-work list while the guild is offline, then restoring it on login.
     --

@@ -33,7 +33,7 @@ if not ok_cfg or type(CFG) ~= "table" then
     return
 end
 
-local MOD_VERSION  = "0.1.0"
+local MOD_VERSION  = "0.2.0"
 local TAG          = "[STASIS] "
 local SUPPRESS_KEY = "GuildStasis_Offline"   -- our namespaced FName key
 
@@ -480,13 +480,25 @@ local function palSnapshot(param)
         hungerType  = firstOf(param, { "GetHungerType" }),
         workerSick  = firstOf(param, { "GetWorkerSick" }),
         groupId     = guidStr(firstOf(param, { "GetGroupId" })),
+        -- The COMPUTED craft speed, after rates are applied. GetCraftSpeed is the
+        -- base stat and does not move when CraftSpeedRates changes, so it is the
+        -- wrong thing to log here.
+        workSpeed   = firstOf(param, { "GetCraftSpeed_withBuff" }),
+        -- Level and Exp, read straight off the save parameter. These exist to answer
+        -- a specific fairness question: does a suppressed pal still gain experience?
+        -- Freezing production but not levelling would still let an offline guild
+        -- advance for free. SetDisableNaturalUpdate's collateral scope is
+        -- uncatalogued and exp was never measured, so measure it rather than assume.
+        level       = try(function() return param.SaveParameter.Level end),
+        exp         = try(function() return param.SaveParameter.Exp end),
     }
 end
 
 local function fmtSnapshot(s)
-    return string.format("stomach=%s/%s decay=%s san=%s/%s hunger=%s sick=%s",
+    return string.format("stomach=%s/%s decay=%s san=%s/%s hunger=%s sick=%s speed=%s lvl=%s exp=%s",
         str(s.stomach), str(s.maxStomach), str(s.decayRate),
-        str(s.sanity), str(s.maxSanity), str(s.hungerType), str(s.workerSick))
+        str(s.sanity), str(s.maxSanity), str(s.hungerType), str(s.workerSick),
+        str(s.workSpeed), str(s.level), str(s.exp))
 end
 
 local function freezeHunger(param, on)
@@ -564,7 +576,13 @@ end
 
 local WORK_SUITABILITIES = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 }
 
+-- The first name is the REAL one, read out of the retail binary's property block
+-- for FPalIndividualCharacterSaveParameter (it sits beside CurrentWorkSuitability).
+-- The three below it were guesses, and all three were wrong -- which means this
+-- whole path could never have worked, independently of its other problems. Kept
+-- only as fallbacks in case a patch renames the member.
 local PREF_MEMBER_NAMES = {
+    "WorkSuitabilityOptionInfo",
     "WorkSuitabilityPreferenceInfo",
     "WorkSuitabilityPreference",
     "WorkSuitabilityOption",
@@ -628,6 +646,74 @@ local function stopWork(param, on)
     return string.format("ok (off-list %d -> %d via %s)", before, arrCount(list), tostring(whereOrErr))
 end
 
+--------------------------------------------------------------------------------
+-- Zero work speed -- the v2 stop-work lever
+--
+-- CraftSpeedRates is a sibling of DecreaseFullStomachRates on the same save
+-- parameter, and it behaves the same way. Verified live on a 1.0 dedicated server:
+-- inserting a 0.0 entry took GetCraftSpeed_withBuff from 70 to 0, and after a
+-- restart every Pal read zero entries with speed back to normal. So this is
+-- SESSION STATE -- nothing persists, no restore map is needed, and a crash
+-- mid-suppression self-heals on reboot.
+--
+-- Why the array is written directly: there is no SetCraftSpeedRates UFunction.
+-- The class ships SetDecreaseFullStomachRates / RemoveDecreaseFullStomachRates for
+-- the hunger container and nothing equivalent for this one, confirmed by
+-- enumerating every function on it.
+--
+-- Find-then-set, so repeated sweeps reuse one entry instead of growing the array.
+-- Release neutralises to 1.0, this container's identity value, because removing an
+-- element from Lua is not established. Harmless either way: the entry is gone on
+-- restart.
+--------------------------------------------------------------------------------
+
+local function zeroWorkSpeed(param, on)
+    if CFG.dry_run then return "dry_run" end
+
+    local sp = try(function() return param.SaveParameter end)
+    if sp == nil then return "SaveParameter unreadable" end
+    local container = try(function() return sp.CraftSpeedRates end)
+    if container == nil then return "CraftSpeedRates unreadable" end
+    local values = try(function() return container.Values end)
+
+    -- Presence proven by extracting a real value, never by a nil check: UE4SS
+    -- returns a phantom wrapper for any name at all.
+    local n = try(function() return values:GetArrayNum() end)
+    if type(n) ~= "number" then return "CraftSpeedRates.Values is not a real array" end
+
+    local want = on and 0.0 or 1.0
+
+    -- Reuse our own entry if an earlier sweep already created one.
+    for i = 1, n do
+        local raw = try(function() return values[i] end)
+        local el = try(function() return raw:get() end) or raw
+        if el ~= nil then
+            local k = try(function() return el.Key:ToString() end)
+            if k == SUPPRESS_KEY then
+                local ok = try(function() el.Value = want; return true end)
+                if not ok then return "existing entry write failed" end
+                return string.format("ok (entry -> %.1f, speed now %s)", want,
+                    str(firstOf(param, { "GetCraftSpeed_withBuff" })))
+            end
+        end
+    end
+
+    if not on then return "n/a (no entry of ours to lift)" end
+
+    -- FName(), NEVER a bare Lua string. A NameProperty given a string makes UE4SS
+    -- dereference null at offset 0x70, and pcall CANNOT catch it -- it takes the
+    -- whole server down. This cost six crashes to learn.
+    local appended = try(function()
+        values[n + 1] = { Key = FName(SUPPRESS_KEY), Value = 0.0 }
+        return true
+    end)
+    if not appended then return "append failed" end
+
+    -- Verify the effect, not the call. Several v1 "successes" were false.
+    return string.format("ok (appended, speed now %s)",
+        str(firstOf(param, { "GetCraftSpeed_withBuff" })))
+end
+
 local function applySanity(param, on)
     local mode = CFG.sanity_mode
     if mode == nil or mode == "none" then return "skipped (sanity_mode=none)" end
@@ -669,6 +755,18 @@ local writeErrors  = 0
 -- simply not in scope there, and indexing the resulting nil global would error out
 -- mid-sweep.
 local manualOverride = {}
+
+-- Assigned for real once sweep() exists, further down. Declared here because sweep()
+-- calls it and a Lua local declared later is simply not in scope there.
+--
+-- Why it exists: the sweep that NOTICES a guild has gone offline cannot suppress it,
+-- because offlineFor is 0 at that moment and the grace check fails. Suppression
+-- therefore needs a second sweep, which makes the worst-case delay
+-- sweep_interval + sweep_interval rather than sweep_interval + grace. At a 60s
+-- interval that is two minutes. One scheduled follow-up at the grace deadline brings
+-- it back to sweep_interval + grace without polling faster, which is the same trade
+-- the login hook's retries make.
+local scheduleGraceSweep = function() end
 
 local function palRatio(v, maxv)
     if type(v) ~= "number" or type(maxv) ~= "number" or maxv <= 0 then return nil end
@@ -727,9 +825,10 @@ local function sweep()
                 local camps, pals = forEachGuildPal(guild, allCamps, function(param, label)
                     local h = CFG.freeze_hunger and freezeHunger(param, false) or "skipped"
                     local s = applySanity(param, false)
+                    local sp = CFG.zero_work_speed and zeroWorkSpeed(param, false) or "skipped"
                     local w = CFG.stop_work_when_offline and stopWork(param, false) or "skipped"
                     if CFG.verbose_pals then
-                        log("  unsuppress %s: hunger=%s sanity=%s work=%s", label, h, s, w)
+                        log("  unsuppress %s: hunger=%s sanity=%s speed=%s work=%s", label, h, s, sp, w)
                     end
                 end)
                 log("guild '%s' (%s) BACK ONLINE (%s) -- lifted suppression on %d pal(s) in %d camp(s)",
@@ -743,6 +842,8 @@ local function sweep()
                 st.offlineSince = t
                 log("guild '%s' (%s) went fully offline; grace %ds before suppression",
                     guild.name, guild.id, CFG.grace_seconds or 60)
+                -- Arm at the grace deadline instead of waiting for the next interval.
+                scheduleGraceSweep()
             end
 
             local offlineFor = t - st.offlineSince
@@ -760,11 +861,13 @@ local function sweep()
                 -- Evidence gathering: after writing, read the values BACK so the
                 -- status file can show whether suppression actually took hold.
                 local stat = { pals = 0, decayZero = 0, decayOther = 0,
-                               minSan = nil, minStomachPct = nil, sick = 0 }
+                               minSan = nil, minStomachPct = nil, sick = 0,
+                               speedZero = 0, speedOther = 0 }
                 local camps, pals, err = forEachGuildPal(guild, allCamps, function(param, label)
                     local before = palSnapshot(param)
                     local h = CFG.freeze_hunger and freezeHunger(param, true) or "skipped"
                     local s = applySanity(param, true)
+                    local sp = CFG.zero_work_speed and zeroWorkSpeed(param, true) or "skipped"
                     local w = CFG.stop_work_when_offline and stopWork(param, true) or "skipped"
                     local tu = "n/a"
                     if firstTime and CFG.topup_once_on_offline and CFG.sanity_mode ~= "topup" then
@@ -783,11 +886,17 @@ local function sweep()
                         stat.minStomachPct = pct
                     end
                     if after.workerSick ~= nil and after.workerSick ~= 0 then stat.sick = stat.sick + 1 end
-                    if h:find("failed") or s:find("failed") then writeErrors = writeErrors + 1 end
+                    -- Read the effect back, so the log proves work speed actually
+                    -- reached zero rather than that a call returned.
+                    if after.workSpeed == 0 then stat.speedZero = stat.speedZero + 1
+                    else stat.speedOther = stat.speedOther + 1 end
+                    if h:find("failed") or s:find("failed") or sp:find("failed") then
+                        writeErrors = writeErrors + 1
+                    end
 
                     if CFG.verbose_pals then
-                        log("  suppress %s: %s | hunger=%s sanity=%s work=%s topup=%s",
-                            label, fmtSnapshot(before), h, s, w, tu)
+                        log("  suppress %s: %s | hunger=%s sanity=%s speed=%s work=%s topup=%s",
+                            label, fmtSnapshot(before), h, s, sp, w, tu)
                     end
                 end)
                 st.stat = stat
@@ -809,12 +918,19 @@ local function sweep()
     -- timer loop has died (the failure mode UE4SS's LoopAsync bug causes), and the
     -- mod is silently doing nothing while still looking installed.
     local onlineCount = 0; for _ in pairs(onlineUids) do onlineCount = onlineCount + 1 end
-    local protectedCount, palsWritten = 0, 0
+    local protectedCount, palsWritten, speedZero = 0, 0, 0
     for _, r in ipairs(report) do
-        if r.protected then protectedCount = protectedCount + 1; palsWritten = palsWritten + (r.pals or 0) end
+        if r.protected then
+            protectedCount = protectedCount + 1
+            palsWritten = palsWritten + (r.pals or 0)
+            speedZero = speedZero + ((r.stat and r.stat.speedZero) or 0)
+        end
     end
-    log("HEARTBEAT sweep=%d uptime=%ds guilds=%d camps=%d online=%d protected=%d pals_written=%d write_errors=%d",
-        sweepCount, t - startedAt, #guilds, #allCamps, onlineCount, protectedCount, palsWritten, writeErrors)
+    -- speed_zero is the M7/M10 evidence: how many suppressed pals actually read a
+    -- computed work speed of 0. If it lags pals_written, the lever is not landing.
+    log("HEARTBEAT sweep=%d uptime=%ds guilds=%d camps=%d online=%d protected=%d pals_written=%d speed_zero=%d write_errors=%d",
+        sweepCount, t - startedAt, #guilds, #allCamps, onlineCount, protectedCount,
+        palsWritten, speedZero, writeErrors)
 
     -- Explicit per-guild decision record. This is the evidence for per-guild
     -- isolation: every guild the sweep considered is named along with whether it
@@ -834,23 +950,25 @@ local function sweep()
     if CFG.status_file then
         local function num(v) if type(v) == "number" then return string.format("%.4f", v) end return "null" end
         local lines = { string.format(
-            '{"version":%q,"mode":%q,"dry_run":%s,"sanity_mode":%q,"stop_work":%s,' ..
+            '{"version":%q,"mode":%q,"dry_run":%s,"sanity_mode":%q,"zero_work_speed":%s,' ..
             '"sweep":%d,"uptime_s":%d,"generated_epoch":%d,"write_errors":%d,' ..
             '"guild_count":%d,"camp_count":%d,"players_online":%d,"guilds":[',
             MOD_VERSION, tostring(CFG.mode), tostring(CFG.dry_run and true or false),
-            tostring(CFG.sanity_mode), tostring(CFG.stop_work_when_offline and true or false),
+            tostring(CFG.sanity_mode), tostring(CFG.zero_work_speed and true or false),
             sweepCount, t - startedAt, t, writeErrors,
             #guilds, #allCamps, (function() local n=0; for _ in pairs(onlineUids) do n=n+1 end; return n end)()) }
         for i, r in ipairs(report) do
             local s = r.stat
             lines[#lines + 1] = string.format(
                 '%s{"id":%q,"name":%q,"protected":%s,"camps":%d,"pals":%d,"offline_s":%d,"reason":%q,' ..
-                '"decay_zero":%d,"decay_nonzero":%d,"min_san":%s,"min_stomach_pct":%s,"sick":%d}',
+                '"decay_zero":%d,"decay_nonzero":%d,"min_san":%s,"min_stomach_pct":%s,"sick":%d,' ..
+                '"speed_zero":%d,"speed_nonzero":%d}',
                 i > 1 and "," or "", r.id, r.name or "",
                 tostring(r.protected and true or false),
                 r.camps or 0, r.pals or 0, math.floor(r.offlineFor or 0), r.reason or "",
                 s and s.decayZero or 0, s and s.decayOther or 0,
-                num(s and s.minSan), num(s and s.minStomachPct), s and s.sick or 0)
+                num(s and s.minSan), num(s and s.minStomachPct), s and s.sick or 0,
+                s and s.speedZero or 0, s and s.speedOther or 0)
         end
         lines[#lines + 1] = "]}"
         local body = table.concat(lines)
@@ -1215,6 +1333,27 @@ runSweepNow = function()
     end)
 end
 
+-- One extra sweep at the grace deadline, so a guild is suppressed grace_seconds after
+-- it went offline rather than on whichever scheduled sweep happens next.
+--
+-- Guarded, because several guilds can go offline in the same sweep and one follow-up
+-- covers all of them: a sweep is global, not per-guild. A second of margin is added so
+-- the follow-up lands just past the deadline rather than exactly on it.
+local graceSweepPending = false
+
+scheduleGraceSweep = function()
+    if graceSweepPending then return end
+    graceSweepPending = true
+    local delay = ((CFG.grace_seconds or 60) * 1000) + 1000
+    ExecuteWithDelay(delay, function()
+        ExecuteInGameThread(function()
+            graceSweepPending = false
+            local ok, err = pcall(sweep)
+            if not ok then log("grace sweep error: %s", tostring(err)) end
+        end)
+    end)
+end
+
 --------------------------------------------------------------------------------
 -- Command transports
 --------------------------------------------------------------------------------
@@ -1267,9 +1406,15 @@ end
 --------------------------------------------------------------------------------
 
 log("GuildStasis v%s loading", MOD_VERSION)
-log("mode=%s dry_run=%s freeze_hunger=%s sanity_mode=%s grace=%ss sweep=%sms",
+log("mode=%s dry_run=%s freeze_hunger=%s sanity_mode=%s zero_work_speed=%s grace=%ss sweep=%sms",
     tostring(CFG.mode), tostring(CFG.dry_run), tostring(CFG.freeze_hunger),
-    tostring(CFG.sanity_mode), tostring(CFG.grace_seconds), tostring(CFG.sweep_interval_ms))
+    tostring(CFG.sanity_mode), tostring(CFG.zero_work_speed),
+    tostring(CFG.grace_seconds), tostring(CFG.sweep_interval_ms))
+
+if CFG.zero_work_speed and CFG.stop_work_when_offline then
+    log("WARN: zero_work_speed and stop_work_when_offline are BOTH on. The second is")
+    log("      superseded, writes to the save file, and cannot restore itself. Turn it off.")
+end
 
 if CFG.mode ~= "run" then
     log("NOTE: mode is not \"run\" -- no game state will be modified.")
@@ -1280,12 +1425,56 @@ end
 -- Un-suppress fast on login. This hook is runtime-verified to fire on a live 1.0
 -- dedicated server. It is a nudge only: the sweep is the mechanism, so a missed
 -- hook costs latency, never correctness.
+-- The two markers below are deliberate. A native access violation cannot be caught
+-- by pcall, so if the process dies during a login-triggered sweep the log is the
+-- only evidence of whether our code was even running. "LOGIN HOOK fired" with no
+-- matching "LOGIN HOOK done" means the crash was inside our sweep; neither line
+-- means the crash was somewhere else entirely.
+-- Follow-up sweeps after a login, and why they are needed.
+--
+-- The hook fires on possession, but the guild's own EPalGuildPlayerStatus flips to
+-- Online slightly AFTER that. So the sweep run inside the hook usually still sees
+-- the player as offline, does nothing, and the release waits for the next scheduled
+-- sweep. Measured on a live server: hook at 17:10:02, release at 17:10:22 -- a 20s
+-- wait staring at idle pals. An earlier note claiming ~8s was a favourable race.
+--
+-- These retries close that gap without shortening sweep_interval_ms, which would
+-- pay the FindAllOf cost on every tick instead of only after a login. Sweeps are
+-- idempotent, so a retry that finds nothing to do is harmless.
+local LOGIN_RETRY_MS = { 2000, 5000, 10000, 20000 }
+
+-- Guard against stacking. Each sweep does a full FindAllOf over the UObject array,
+-- so several players arriving together must not queue a burst of them -- one set of
+-- retries covers every guild anyway, because a sweep is global.
+local loginRetryPending = false
+
+local function loginRetrySweeps()
+    if loginRetryPending then return end
+    loginRetryPending = true
+    local remaining = #LOGIN_RETRY_MS
+    for _, delay in ipairs(LOGIN_RETRY_MS) do
+        -- One-shot delays only. Never LoopAsync (Rule 4).
+        ExecuteWithDelay(delay, function()
+            ExecuteInGameThread(function()
+                refreshOnlinePlayers()
+                local ok, err = pcall(sweep)
+                if not ok then log("login retry sweep error: %s", tostring(err)) end
+                remaining = remaining - 1
+                if remaining <= 0 then loginRetryPending = false end
+            end)
+        end)
+    end
+end
+
 local hooked = try(function()
     RegisterHook("/Script/Engine.PlayerController:ServerAcknowledgePossession", function()
         ExecuteInGameThread(function()
+            log("LOGIN HOOK fired")
             refreshOnlinePlayers()
             local ok, err = pcall(sweep)
             if not ok then log("login-triggered sweep error: %s", tostring(err)) end
+            loginRetrySweeps()
+            log("LOGIN HOOK done (retries queued at 2s/5s/10s/20s)")
         end)
     end)
     return true
