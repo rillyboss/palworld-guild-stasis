@@ -76,7 +76,9 @@ try {
         Head "1. Loaded?"
         $banner = $stasis | Where-Object { $_ -match 'GuildStasis v[\d\.]+ loading' } | Select-Object -Last 1
         if ($banner) { Good ($banner -replace '^\[([\d\-]+\s[\d:]+)\.\d+\].*\[STASIS\]\s*','$1  ') } else { Bad "mod banner not found -- not loaded"; $fail++ }
-        $cfgline = $stasis | Where-Object { $_ -match 'mode=\w+ dry_run=' } | Select-Object -Last 1
+        # Anchor on the startup banner's shape, not just 'mode=... dry_run=', or the
+        # 'status' command's own reply (which contains the same text) wins.
+        $cfgline = $stasis | Where-Object { $_ -match 'mode=\w+ dry_run=\S+ freeze_hunger=' } | Select-Object -Last 1
         if ($cfgline) { Say ($cfgline -replace '^.*\[STASIS\]\s*','config: ') }
         $hook = $stasis | Where-Object { $_ -match 'login hook.*registered' } | Select-Object -Last 1
         if ($hook) { Good "login hook registered" } else { Warn "login hook not confirmed (un-suppress will rely on the poll only)" }

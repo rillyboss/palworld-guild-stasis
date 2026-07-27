@@ -46,6 +46,12 @@ You need to be able to write files *outside* `Pal/Saved`. Both install routes do
 - Manual → `Pal/Binaries/Win64/dwmapi.dll` + `ue4ss/`
 - Official loader → `Mods/PalModSettings.ini` + `Mods/Workshop/`
 
+**A Wine-hosted Windows build counts as compatible.** What matters is the *build*, not the host OS. BisectHosting's mod-support Palworld product runs the Windows server under Wine on a Linux container (UE4SS logs `Z:\home\container\Pal\Binaries\Win64\...`), and UE4SS, this mod, and saving all work there normally — verified in production. Don't judge by the panel or the OS; judge by whether `Pal/Binaries/Win64` exists.
+
+One caveat if you land on a Wine host: there's a documented Palworld 1.0-under-Proton bug where the server commits exactly one save per boot then silently wedges. It does **not** occur on Bisect's product, but it fails silently when it does occur, so confirm `Level.sav` changes size across a couple of autosaves before trusting a new host.
+
+**Product variant matters more than provider.** The same Bisect account served the *Linux* build until it was reinstalled as the mod-support product. So a provider being "compatible" is meaningless — check the specific product you bought.
+
 **Verified incompatible: Nitrado.** Its FTP exposes only `Pal/Saved`. Confirmed with retries — the other directories don't appear in a listing of their own parent, so this isn't a permissions quirk you can work around:
 
 ```
@@ -199,7 +205,16 @@ Two transports, because neither is guaranteed on every host. Same commands eithe
 
 An id prefix is enough — `stasis.pals 78686694` works, and ambiguous prefixes are rejected rather than guessed.
 
-Console registration uses UE4SS's `RegisterConsoleCommandHandler`, which is **not guaranteed to be reachable** from a headless Palworld server's own console. Each verb is registered independently and failure only logs, so the mod never breaks over it. Check the startup log for `console commands registered: N`.
+Console registration uses UE4SS's `RegisterConsoleCommandHandler`. It registers successfully (`console commands registered: 9` in the startup log) — **but most host panels cannot reach it.**
+
+If your panel's console proxies to Palworld's admin API rather than UE's exec layer, you'll get:
+
+```
+[RestAPI]: Command not found in RestAPI Command List, attempting RCON...
+[RCON]: Unknown command
+```
+
+That's confirmed on BisectHosting and is a property of that whole class of panel, not one host. **On such a server, use the command file below** — the console verbs are only usable where a real UE console exists.
 
 **Command file** — works everywhere, including hosts with no usable console. Write a line into:
 

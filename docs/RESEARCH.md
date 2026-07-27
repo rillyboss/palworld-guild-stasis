@@ -17,6 +17,36 @@ Run against a local Windows dedicated server, app 2394010, buildid `24181105`, r
 | **`bUseUObjectArrayCache = false`** | Already the default in the Okaetsu Palworld bundle's `UE4SS-settings.ini`. No change needed. |
 | Useful cheap oracle | `GET /v1/api/metrics` returns `basecampnum` and `currentplayernum` â€” no mod required. |
 
+### Wine-hosted Windows servers DO work (correction to earlier research)
+
+Earlier notes here treated Wine/Proton as a dead end for Palworld 1.0, citing an open issue where the server commits exactly one save per boot and then wedges forever (`ReplaceFileW` failing with Win32 error 267, reproduced across five Proton builds). That is real, but it is **not** a blanket statement about Wine — it does not manifest on a properly configured managed host.
+
+Verified on BisectHosting's mod-support Palworld product (2026-07-27):
+
+| Observation | Detail |
+|---|---|
+| It is the **Windows** build under Wine | UE4SS logged `game executable: Z:\home\container\Pal\Binaries\Win64\PalServer-Win64-Shipping-Cmd.exe`. `Z:\` mapped to `/` is the standard Wine drive mapping, and `/home/container` is a Linux container path. |
+| Full Windows tree present | `Pal/Binaries/Win64` with `PalServer-Win64-Shipping.exe` (152,378,880 bytes — byte-identical in size to a native Windows install), `Manifest_*_Win64.txt`, `steamclient.dll`. |
+| **UE4SS works** | Injects, loads Lua mods, `RegisterHook` succeeds, reflection reads and writes all behave exactly as on native Windows. |
+| **Saving works** | `Level.sav` observed at 1,788,513 → 1,766,282 → 1,754,449 → 1,768,750 across a single boot, and a forced `POST /v1/api/save` changed it again. Multiple commits per boot, so the one-save-then-wedge failure is absent. |
+
+So the requirement is **the Windows build with a writable `Pal/Binaries/Win64`** — not "native Windows hardware". A Wine-hosted Windows build qualifies.
+
+**Detecting this:** don't infer the platform from the panel or the OS. Look at `Pal/Binaries`: a `Win64` directory means viable, a `Linux` directory (with `PalServer.sh`, `Manifest_*_Linux.txt`, `PalServer-Linux-Shipping`) means the mod cannot run. The same Bisect account served the Linux build before a reinstall onto the mod-support product, so **the product variant matters more than the host**.
+
+If you land on a Wine host, still verify saves are cycling before trusting it — watch `Level.sav` change size across a couple of autosaves, or force one over REST. The failure is silent: you lose everything since boot with no error.
+
+### Console commands cannot be reached through a REST/RCON panel console
+
+UE4SS's `RegisterConsoleCommandHandler` registers fine (logged `console commands registered: 9`), but a host panel whose console proxies to Palworld's admin API never reaches UE's exec layer. Typing `stasis.status` into Bisect's console returns:
+
+```
+[RestAPI]: Command not found in RestAPI Command List, attempting RCON...
+[RCON]: Unknown command
+```
+
+This is a property of that whole class of panel, not one host. Any mod relying solely on UE console commands is undebuggable on such a server, which is why this mod also polls a command file.
+
 ### Confirmed by writing, not just reading
 
 | Result | Detail |
