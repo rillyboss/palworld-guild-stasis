@@ -21,8 +21,22 @@ return {
     -- TRIGGER
     ----------------------------------------------------------------------------
     -- Seconds after the LAST guild member logs out before suppression is armed.
-    -- A grace delay also avoids protecting someone who logged off mid-fight.
-    grace_seconds = 300,
+    --
+    -- Short is generally better here. The grace delay exists only to avoid
+    -- churning suppression on brief disconnects and reconnects -- it is NOT an
+    -- anti-exploit measure, because freezing hunger on an offline guild is the
+    -- entire point of the mod, so arming it sooner is strictly closer to what you
+    -- want. Every write is idempotent and reversed on login, so even needless
+    -- churn is harmless.
+    --
+    -- Practical floor: suppression can only be applied on a sweep, so anything
+    -- below sweep_interval_ms buys you nothing. With the default 30s sweep, 60
+    -- means protection lands within about two sweeps of the last logout.
+    --
+    -- Set 0 to suppress at the first sweep after a guild goes offline.
+    -- Changeable at runtime with 'stasis.grace <seconds>' (does not persist across
+    -- a restart -- edit this file for that).
+    grace_seconds = 60,
 
     -- Milliseconds between sweeps. Each sweep re-derives all state from live
     -- objects, so a longer interval only delays reaction, it never desyncs.

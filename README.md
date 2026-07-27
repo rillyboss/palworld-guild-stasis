@@ -96,21 +96,62 @@ WorkshopRootDir=<absolute path to Mods\Workshop>
 
 ## Configuration
 
-`Scripts/config.lua`, read once at load. Restart to apply.
+### How to change settings
 
-| Setting | Default | Notes |
+All settings live in one file. On the server that's:
+
+```
+Pal/Binaries/Win64/ue4ss/Mods/GuildStasis/Scripts/config.lua
+```
+
+Edit it with the host's file manager or over FTP/SFTP, then **restart the server**. The file is read once at mod load; nothing in it is hot-reloaded.
+
+It's plain Lua — a table of `key = value,` pairs. Keep the trailing commas, quote strings, and use `true` / `false` / `nil` unquoted. If the file has a syntax error the mod refuses to load and says so in `UE4SS.log`, rather than running with half a config.
+
+Two settings can also be changed **at runtime** without a restart, via the console or command file (see [Debugging and admin commands](#debugging-and-admin-commands)):
+
+| Runtime command | Effect |
+|---|---|
+| `stasis.grace <seconds>` | Change `grace_seconds` immediately, including for guilds already counting down |
+| `stasis.suppress` / `release` / `auto` `<guild>` | Per-guild override of the automatic decision |
+
+Runtime changes do **not** persist across a restart. Edit `config.lua` for that.
+
+### Trigger
+
+| Setting | Default | What it does |
 |---|---|---|
-| `mode` | `"run"` | `"recon"` is read-only — enumerates everything and writes nothing |
-| `dry_run` | `false` | `true` logs every decision without writing |
-| `grace_seconds` | `300` | Delay after the last member logs out. Also deters logging off mid-fight |
-| `sweep_interval_ms` | `30000` | `FindAllOf` scans the whole object array — don't make this small |
-| `freeze_hunger` | `true` | The high-confidence lever |
-| `sanity_mode` | `"natural_update"` | The verified one. `"none"`, `"disable_flags"`, `"topup"` also exist |
-| `topup_once_on_offline` | `true` | See below |
-| `stop_work_when_offline` | `false` | **Experimental, incomplete** — no restore map yet |
-| `verbose_pals` | `false` | Per-Pal write logging. Noisy but it's the isolation evidence |
-| `status_file` | `nil` | Path for the status JSON, relative to `Pal/Binaries/Win64`. See below |
-| `force_suppress_for_testing` | `false` | **Test only.** Suppresses every guild unconditionally |
+| `mode` | `"run"` | `"run"` acts on offline guilds. `"recon"` is fully read-only — it enumerates guilds, camps and Pals and logs everything, writing nothing. Use `"recon"` the first time you deploy to an unfamiliar server. |
+| `dry_run` | `false` | With `true`, the mod makes every decision and logs exactly what it *would* write, but performs no writes. A safer first step than `"recon"` because it also exercises the state machine. |
+| `grace_seconds` | `60` | Seconds after the **last** guild member logs out before suppression is armed. Short is generally better: the delay only avoids churn on brief disconnects, and it is not an anti-exploit measure — freezing an offline guild's hunger is the whole point. `0` suppresses at the first sweep after a guild goes offline. Values below `sweep_interval_ms` buy nothing, since suppression can only happen on a sweep. |
+| `sweep_interval_ms` | `30000` | Milliseconds between sweeps. Each sweep re-derives all state from live objects, so a longer interval only delays reaction — it never desynchronises. Don't set this small: `FindAllOf` scans the entire UObject array every sweep. |
+| `controller_refresh_ms` | `5000` | How often the cached `PlayerController` list is refreshed. Used to cross-check each guild's own online/offline flags, so a stale flag can't cause a wrong decision. |
+
+### What gets suppressed
+
+| Setting | Default | What it does |
+|---|---|---|
+| `freeze_hunger` | `true` | Freezes hunger via `SetDecreaseFullStomachRates(key, 0.0)`. The highest-confidence lever — verified to drive the observed decay rate from `1.0` to `0.0`. |
+| `sanity_mode` | `"natural_update"` | How SAN is handled. `"natural_update"` is the **verified** option (`SetDisableNaturalUpdate`, a plain reflected UFUNCTION). `"none"` leaves SAN alone. `"disable_flags"` and `"topup"` are alternatives kept for hosts where the verified one misbehaves — see `docs/RESEARCH.md`. |
+| `topup_once_on_offline` | `true` | On the offline transition, top SAN up once. A hunger-frozen Pal never eats, so the eat-driven SAN recovery path never fires again — without this, a guild that logs off with miserable Pals stays miserable forever. Set `false` if you consider it too generous. |
+| `topup_below_ratio` | `0.9` | Only used when `sanity_mode = "topup"`. Top up when SAN falls below this fraction of the Pal's maximum. Expressed as a ratio deliberately: `MaxFullStomach` varies 100–600 by species, so absolute thresholds are wrong. |
+| `stop_work_when_offline` | `false` | **Experimental and incomplete — leave off.** Would park Pals so an offline base produces nothing. Restoring each Pal's original work configuration needs a fingerprint-keyed map that isn't built yet, and getting it wrong loses players' per-Pal settings. Tracked in `docs/V2-PLAN.md`. |
+
+### Diagnostics
+
+| Setting | Default | What it does |
+|---|---|---|
+| `status_file` | `nil` | Path for the machine-readable status JSON, **relative to `Pal/Binaries/Win64`** (the server's working directory). Recommended: `"ue4ss/Mods/GuildStasis/status.json"`. This is what `palworld-modstatus.ps1` reads to prove writes are landing. |
+| `verbose_pals` | `false` | Log every per-Pal write with before/after values. Noisy on a busy server, but it is the per-guild isolation evidence — every write line carries its camp id. Worth enabling for a first live run. |
+| `verbose_resolve` | `true` | Log each identifier the mod resolves at startup, one line each, so a failure names itself instead of surfacing later as a mysterious nil. |
+| `check_server_settings` | `true` | Read `PalWorldSettings.ini` at startup and warn about settings that would undo the mod — chiefly `bAutoResetGuildNoOnlinePlayers`, which deletes an offline guild's base Pals outright. |
+
+### Testing only
+
+| Setting | Default | What it does |
+|---|---|---|
+| `force_suppress_for_testing` | `false` | Suppresses **every** guild unconditionally, ignoring presence and grace. Exists because on a single-account test server you cannot have your guild offline while the world is still simulated. **Never ship this enabled** — it defeats the entire per-guild premise. |
+| `probe_write` | `nil` | Runs one write-capability probe against one Pal and logs the result: `"ufunction_flag"`, `"nested_scalar"`, `"nested_tmap"`, or `"nested_tarray"`. Use exactly one per server boot — a native access violation here cannot be caught by `pcall`, so mixing probes makes a crash impossible to attribute. |
 
 ### Why `topup_once_on_offline` exists
 
@@ -151,6 +192,8 @@ Two transports, because neither is guaranteed on every host. Same commands eithe
 | `stasis.suppress <idprefix>` | Force this guild suppressed **now**, ignoring presence and the grace delay |
 | `stasis.release <idprefix>` | Force this guild un-suppressed |
 | `stasis.auto <idprefix>` | Clear the override, return to automatic behaviour |
+| `stasis.grace` | Show the current `grace_seconds` |
+| `stasis.grace <seconds>` | Change it immediately (0–86400), including for guilds already counting down. Runtime only — edit `config.lua` to persist |
 | `stasis.sweep` | Run a sweep immediately instead of waiting for the timer |
 | `stasis.help` | List the commands |
 

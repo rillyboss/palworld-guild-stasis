@@ -742,11 +742,11 @@ local function sweep()
             if st.offlineSince == nil then
                 st.offlineSince = t
                 log("guild '%s' (%s) went fully offline; grace %ds before suppression",
-                    guild.name, guild.id, CFG.grace_seconds or 300)
+                    guild.name, guild.id, CFG.grace_seconds or 60)
             end
 
             local offlineFor = t - st.offlineSince
-            local graceMet = offlineFor >= (CFG.grace_seconds or 300)
+            local graceMet = offlineFor >= (CFG.grace_seconds or 60)
             if CFG.force_suppress_for_testing then graceMet = true end
 
             if CFG.mode ~= "run" then
@@ -754,7 +754,7 @@ local function sweep()
                                         reason = "recon mode" }
             elseif not graceMet then
                 report[#report + 1] = { id = guild.id, name = guild.name, protected = false,
-                                        reason = string.format("in grace (%.0fs/%ds)", offlineFor, CFG.grace_seconds or 300) }
+                                        reason = string.format("in grace (%.0fs/%ds)", offlineFor, CFG.grace_seconds or 60) }
             else
                 local firstTime = not st.suppressed
                 -- Evidence gathering: after writing, read the values BACK so the
@@ -1080,7 +1080,7 @@ local function handleCommand(raw)
     if verb == "help" then
         cmdReply({
             "commands: status | guilds | pals <idprefix> | suppress <idprefix> |",
-            "          release <idprefix> | auto <idprefix> | sweep | help",
+            "          release <idprefix> | auto <idprefix> | grace [seconds] | sweep | help",
         })
 
     elseif verb == "status" then
@@ -1091,7 +1091,7 @@ local function handleCommand(raw)
         cmdReply({
             ("v%s mode=%s dry_run=%s sanity=%s"):format(MOD_VERSION, tostring(CFG.mode),
                 tostring(CFG.dry_run), tostring(CFG.sanity_mode)),
-            ("sweeps=%d uptime=%ds writeErrors=%d"):format(sweepCount, os.time() - startedAt, writeErrors),
+            ("sweeps=%d uptime=%ds writeErrors=%d grace=%ss"):format(sweepCount, os.time() - startedAt, writeErrors, tostring(CFG.grace_seconds)),
             ("playersOnline=%d guildsSuppressed=%d manualOverrides=%d"):format(online, prot, ov),
         })
 
@@ -1136,6 +1136,27 @@ local function handleCommand(raw)
                 :format(g.id:sub(1, 8), g.name or "?", verb) })
         end
         if runSweepNow then runSweepNow() end
+
+    elseif verb == "grace" then
+        if rest == nil or rest:gsub("%s", "") == "" then
+            cmdReply({ ("grace_seconds = %s   (change with 'grace <seconds>')")
+                :format(tostring(CFG.grace_seconds)) })
+        else
+            local n = tonumber(rest)
+            if n == nil or n < 0 or n > 86400 then
+                cmdReply({ ("'%s' is not a valid grace value -- use 0 to 86400 seconds"):format(rest) })
+            else
+                local previous = CFG.grace_seconds
+                CFG.grace_seconds = math.floor(n)
+                cmdReply({
+                    ("grace_seconds %s -> %d")
+                        :format(tostring(previous), CFG.grace_seconds),
+                    "applies immediately, including to guilds already counting down",
+                    "runtime only -- edit Scripts/config.lua to survive a restart",
+                })
+                if runSweepNow then runSweepNow() end
+            end
+        end
 
     elseif verb == "sweep" then
         cmdReply({ "running a sweep now" })
@@ -1218,7 +1239,7 @@ local function setupCommands()
 
     -- UE console channel. Unproven on a headless Palworld dedicated server, so
     -- every registration is individually guarded and failure is only logged.
-    local verbs = { "status", "guilds", "pals", "suppress", "release", "auto", "sweep", "help" }
+    local verbs = { "status", "guilds", "pals", "suppress", "release", "auto", "grace", "sweep", "help" }
     local registered, failed = 0, 0
     for _, v in ipairs(verbs) do
         local name = "stasis." .. v
