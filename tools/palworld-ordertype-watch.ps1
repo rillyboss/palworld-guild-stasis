@@ -1,10 +1,16 @@
 <#
 .SYNOPSIS
-  Observe base Pal behaviour while the v2 CurrentOrderType probe cycles values.
+  Observe whether a guild's base Pals are working. The external oracle for M7/M10.
 
 .DESCRIPTION
-  The probe mutates; this observes. Keeping them separate means the evidence does
-  not depend on the probe's own assumptions about what changed.
+  Whatever mechanism v2 ends up using, this observes its effect independently.
+  Keeping mutation and observation separate means the evidence does not depend on
+  the mod's own assumptions about what it changed.
+
+  Originally written to watch the CurrentOrderType probe, which was deleted: that
+  enum turned out to be EPalMapBaseCampWorkerOrderType { Work, BattleFighter,
+  BattleAllWorker }, a battle order with no idle value. This tool outlived it
+  because "are these Pals actually working" is the question either way.
 
   Polls GET /v1/api/game-data and reports each base Pal's AI_Action, classified:
 
@@ -23,7 +29,8 @@
   Config name for REST access, e.g. 'local'.
 
 .PARAMETER Seconds
-  How long to watch. Default 480 (covers a 4-value cycle at 90s dwell plus slack).
+  How long to watch. Default 480. M7 wants at least 300s of a suppressed guild
+  reporting no working Pals.
 
 .EXAMPLE
   .\palworld-ordertype-watch.ps1 -HostName local
@@ -72,7 +79,8 @@ try {
         Start-Sleep -Seconds $IntervalSec
     }
     Write-Host ""
-    Write-Host "done. If WORKING never dropped to 0 for any dwell, CurrentOrderType is not the work gate" -ForegroundColor Gray
-    Write-Host "and v2 must fall back to per-Pal OffWorkSuitabilityList with a restore map." -ForegroundColor Gray
+    Write-Host "done. M7 passes only if WORKING held at 0 for the whole window for the suppressed" -ForegroundColor Gray
+    Write-Host "guild while another guild's Pals kept working. Under the Pal Box parking design the" -ForegroundColor Gray
+    Write-Host "stronger result is pals=0 for that guild: parked Pals leave the world entirely." -ForegroundColor Gray
 }
 finally { try { Close-PalHost } catch {} }

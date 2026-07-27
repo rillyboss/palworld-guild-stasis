@@ -29,7 +29,7 @@ Not yet verified: durability beyond ~20 minutes (no overnight soak), and the ful
 
 Suppressed Pals **keep working**. They haul, they craft, they produce — they just never get hungry and never lose SAN. So an offline base keeps generating output with no upkeep, which is arguably better than being online.
 
-If you consider that unbalanced, that's what the v2 work targets: parking the Pals so they're genuinely inert, plus preventing raids against a guild that can no longer defend itself. Neither mechanism is solved yet — see `docs/TESTPLAN.md`.
+If you consider that unbalanced, that's what the v2 work targets: parking the Pals in the guild's Pal Box so they're genuinely inert. Not solved yet, and it is a bigger change than v1 because it moves save data — see `docs/V2-PLAN.md`. The companion idea of blocking raids on a defenceless guild is deferred: raids may simply not fire against a fully-offline guild, which would make it unnecessary.
 
 ## Requirements
 

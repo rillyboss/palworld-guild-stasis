@@ -100,6 +100,134 @@ Compiled 2026-07-26 against Palworld client build `24181527` (exe dated 2026-07-
 
 **Byte offsets appear nowhere in this mod's code.** A single patch reorders all of them. Every access is by reflected name.
 
+## v2 leads, read out of the retail server binary (2026-07-27)
+
+Source: reflection name strings in `PalServer-Win64-Shipping.exe` (152,378,880 bytes, the local 1.0.1 dedicated server install). Method: extract printable ASCII runs and read the *neighbourhood* of each name, because UE registers one class's reflected members as a contiguous block, so a property's neighbours identify its owner.
+
+**How much this evidence is worth.** A name in the reflection table is far stronger than a non-nil `obj[name]` -- it cannot be a `TrivialObject` phantom, because the string is physically present in the registration data. It still does **not** prove that Lua can reach the member, that the member is writable, or that it does what its name suggests. Everything in this section is *static* and must be runtime-confirmed before any of it is relied on. Nothing here has been executed.
+
+### `CurrentOrderType` is a battle order, not a work gate -- Feature 1's primary lever is dead
+
+The enum is `EPalMapBaseCampWorkerOrderType`, and it has exactly three enumerators, in declaration order:
+
+```
+0  Work               (the default, and what every camp reads)
+1  BattleFighter
+2  BattleAllWorker
+```
+
+`IsBattleOrderType` is registered in the very next slot after the enum name, which is what the enum is *for*: choosing whether the camp's Pals keep working or drop everything and fight. Nothing in it means "idle", "rest" or "stop".
+
+So the v2 plan's headline lever does the opposite of what was hoped:
+
+- Writing `1` or `2` puts the base on a war footing.
+- The probe's finding that `3` was "accepted and read back" proves nothing. There is no enumerator 3. UE stores the raw byte, so a readback only echoes what was written -- exactly the class of false positive this project has been bitten by before.
+- And it **persists to the save**. A base left at `BattleAllWorker` stays on a war footing across restarts.
+
+`tools/probe/v2-ordertype.lua` as originally written would therefore have written two known-harmful, save-persisted values to a live camp. It has been replaced.
+
+Also present, and not to be confused with it: `EPalOtomoPalOrderType { Default, Warlike, NotCombat }`, which is the follower-Pal order, not a base camp one.
+
+### The mechanism this repo is named after does exist
+
+| Symbol | Owner (from neighbourhood) | Why it matters |
+|---|---|---|
+| `PalStorage` | the **guild** object, in the same property block as `UnderRaidBaseCampIds`, `GuildMarkers`, `BaseCampLevel`, `OnRep_GuildName` | a guild's Pal Box reachable straight off a guild we already enumerate, with no map-object hunting |
+| `UPalMapObjectCharacterContainerModule::TryMoveCharacterToContainerFrom` | qualified name read from a serialization string; params `OutContainer`, `FromSlot` | a plain server-side function, **not** a `_ToServer` RPC, so it does not need an online player |
+| `RequestMoveWorkerToPalBox_ToServer` | player-side RPC block | the vanilla operation, but RPC-only: unusable here, since every member of the target guild is offline by definition |
+| `PalBoxPageNum`, `PalBoxSlotNumInPage` | `UPalGameSetting` block | Pal Box capacity, so a park operation can check for room first |
+| `Failed_FullGlobalPalStorage`, `Failed_FullPalStorage`, `FullPalBox` | failure-reason strings | parking **can** fail on a full box. It must be handled, not assumed |
+| `AutoSANRegene_Percent_perSecond_PalStorage` | `UPalGameSetting` block | Pals in the Pal Box **regenerate SAN** on a vanilla timer |
+| `PalBoxTimePeriodRecoverySick` | `UPalGameSetting` block | the Pal Box **cures sickness** over a vanilla time period |
+
+Those last two are the interesting ones, because they are vanilla behaviour rather than anything this mod would have to invent.
+
+### Raids: per-guild state exists, and there is a force-stop
+
+Contrary to the plan's assumption that `bEnableInvaderEnemy` (server-global) was the only surface:
+
+| Symbol | Owner | Use |
+|---|---|---|
+| `UnderRaidBaseCampIds`, `UnderRaidNotificationLogId` | the **guild** object | which of a guild's camps are under raid, readable per guild. A cheap M9 oracle that needs no hook and no `game-data` |
+| `bIsUnderRaid`, `OnRaidBeginDelegate`, `OnRaidEndDelegate`, `Detectors` | `RaidDetectModule`, a base camp module | per-camp raid state and begin/end delegates |
+| `IsIncidentBeginAllowed` | incident system | a reflected predicate gating whether an incident may begin |
+| `ForceStopByIncidentId`, `ForceStopByIncidentType` | incident system | reflected force-stop. A raid that has begun can potentially be ended |
+| `StartInvaderMarchForBaseCamp`, `StartInvaderMarchAll`, `StartInvaderMarchRandom`, `RequestIncidentInvaderEnemy` (param `OccuredBaseCamp`) | invader manager | the spawn path is **per base camp**, not world-global |
+| `RemoveInvaderIncident` | invader manager | removal path |
+| `bInvaderDisable`, `bForceDisableSpawnRandomIncident` | a **debug/developer settings** block (neighbours are `bDebugLogEnableWanted`, `bDisableCrime`, `bShowDebugWantedSpawnerSphere`) | a runtime global raid off-switch, no restart needed. Global, so same operator-choice caveat as the ini key |
+| `RequestCancelInvader`, `GetInvaderCancelCost` | player RPC block, next to `RequestRecruitPal` | the vanilla paid cancel. RPC-only, so unusable for an offline guild |
+
+The plan expected `RegisterHook` to be the only route and expected it to fail the way `UPalWorkBase::IsExistAssignableSlot` did. `ForceStopByIncidentType` is a direct call instead, which sidesteps that risk entirely if it is reachable.
+
+### The game's per-guild all-offline flag is the guild auto-reset, not a raid gate
+
+`bAllPlayerNotOnlineAndAlreadyReset` sits in the guild property block next to `EnableResetPropertiesWhenPlayerDelete`. It is the guild-side bookkeeping for a feature this mod already warns about: `bAutoResetGuildNoOnlinePlayers` and `AutoResetGuildTimeNoOnlinePlayers` are in the ini options block, **immediately adjacent to `bEnableInvaderEnemy`**. So the flag records "this guild has already been auto-reset for having nobody online", not a general engine notion of offline that v2 could reuse.
+
+Two things follow. The mod's existing startup warning about `bAutoResetGuildNoOnlinePlayers` is aimed at exactly the right setting, and finding that flag is **not** evidence about raid gating -- do not let the coincidence of wording promote it into one.
+
+### Runtime results: the reflected surface, enumerated rather than guessed (2026-07-27)
+
+Run on the local test server, two guilds, one online player, read-only. **Method change that matters more than any single finding:** stop guessing member names and enumerate them. `UStruct:ForEachProperty` and `ForEachFunction` both work on this UE4SS build, and a name that comes *out* of them is real by construction, where a name we put *in* can never be trusted. This retires the phantom-wrapper problem for discovery entirely.
+
+Two gotchas, both of which cost a probe iteration:
+
+1. They enumerate a class's **own** declared members only. `PalGroupGuild` reports 9 properties and `PalStorage`, `GuildName`, `UnderRaidBaseCampIds` are not among them -- all three are on `PalGroupGuildBase`. Always walk the superclass chain.
+2. "The call failed" and "the class has no own members" are different facts. Report them separately or a dead end reads as a finding.
+
+Also: a UFunction is itself a UStruct, so `ForEachProperty` on one yields its **parameters**. That is how to learn a signature without calling anything.
+
+#### The Pal Box parking route is dead
+
+| Class | Mutators | Verdict |
+|---|---|---|
+| `PalGuildPalStorage` (`guild.PalStorage`) | **zero reflected members at all**, derives straight from `Object` | resolves as a live object, but opaque from Lua. A handle we can see and cannot open |
+| `PalIndividualCharacterContainer` | none. `FindByHandle`, `FindEmptySlot`, `Get`, `GetSlots`, `Num` | read-only |
+| `PalContainerBase` | none. `GetId`, `IsEmpty` | read-only |
+| `PalCharacterContainerManager` | none. `GetContainer`, `TryGetContainer`, `GetLocalContainer`, `GetLocalSlot` | read-only |
+| `PalIndividualCharacterSlot` | `Handle : ObjectProperty` but **no setter**. `GetHandle`, `GetSlotId`, `IsEmpty`, `Setup` | see below |
+| `PalMapObjectCharacterContainerModule` | **class not found at runtime** | the binary's `TryMoveCharacterToContainerFrom` is unreachable. Contrast `PalMapObjectItemContainerModule`, 396 live instances |
+
+Both ends of the move are visible: the Pal Box containers are ordinary `PalIndividualCharacterContainer` instances with 960 slots, exactly `PalBoxPageNum 32 x PalBoxSlotNumInPage 30`. There is simply no reflected function to move anything between them, and the only real mover, `RequestMoveWorkerToPalBox_ToServer`, is a player RPC needing an online member of the target guild -- which never exists by definition.
+
+`slot.Handle` is a plain ObjectProperty, so parking is *technically* reachable by hand-assigning handles between slots. **Do not.** It bypasses the container manager's bookkeeping, `ReplicateHandleID`, and the worker director's own `WaitingWorkerIndividualIds` / `WorkerTasks`, and its failure mode is duplicated or deleted Pals. Ruled out on risk, not on reachability -- and worth keeping that distinction, because "unreachable" invites a retry while "unsafe" does not.
+
+#### Signatures worth having
+
+```
+PalCharacterContainerManager.GetContainer(ContainerId : Struct) -> Object
+PalCharacterContainerManager.TryGetContainer(ContainerId, Container : out, -> bool)
+PalIndividualCharacterContainer.Get(Index : int) -> Object
+PalIndividualCharacterContainer.FindEmptySlot() -> Object
+PalBaseCampWorkerDirector.OrderCommand(OrderType : Enum)
+PalGroupGuildBase.OnBaseCampRaidStarted_ServerInternal(RaidDetectModule : Object)
+PalGroupGuildBase.OnBaseCampRaidEnded_ServerInternal(RaidDetectModule : Object)
+```
+
+Prefer `GetContainer` over `TryGetContainer`: the latter returns its container through an out-param, and out-param marshalling silently yields nothing here, exactly as it does for `TryGetModel`.
+
+`OrderCommand(OrderType)` independently confirms the `CurrentOrderType` verdict -- the only thing a worker director can be *commanded* to do is choose a battle stance.
+
+#### The raid hooks are the Feature 2 unlock
+
+`OnBaseCampRaidStarted_ServerInternal(RaidDetectModule)` and `OnBaseCampRaidEnded_ServerInternal` are UFunctions on `PalGroupGuildBase`: server-side, per-guild, and `RegisterHook`-able. That turns M9 from a research project into "hook it and see whether it ever fires for a fully-offline guild". `OnRep_UnderRaidBaseCampIds` is there too.
+
+#### Corrections to earlier notes in this file
+
+- **A guild's own id IS reachable.** This file says the guild's own id accessors don't yield a usable FGuid. The reason was the wrong name: the property is `ID : StructProperty` on `PalGroupBase`. `GetGroupId` / `GroupId` do not exist. Taking the id from the `GuildMap` key still works and is still fine, but it is not forced.
+- `EPalBaseCampWorkerDirectorState { Init, WaitForLoadingAround, Active }` is the `State` property's enum. It is a **lifecycle**, not a work policy. Writing it would repeat the `CurrentOrderType` mistake.
+- Other enums seen: `EPalBaseCampWorkerWalkAroundState { WalkAround, Rest }`.
+
+#### Hunger, measured
+
+Read across every container on a live world: every Pal reported `decayRate=1.0` and `disableNaturalUpdate=false` while its guild was online, with `PalStomachDecreaceRate=1.000000` in the ini. Party Pals sat at `100.0/100.0` while a base Pal in the same guild sat at `0.0/100.0`, so decay is real and the difference is food access, not decay rate. Useful as a baseline: **a suppressed Pal must read `decayRate=0.0`, and anything else in a party container is a bug.**
+
+### Still open after this pass
+
+- **Does a raid fire against a fully-offline guild?** Static strings show structure, not control flow, so this is not answerable this way. There is a community claim (reported 2026-07-27) that raids **cannot** occur while every member of a guild is offline. It is plausible and, if true, makes v2's Feature 2 unnecessary. It is **not** confirmed here, and this file's own source-hygiene rule applies: the Palworld hosting/SEO blog ecosystem fabricates freely, and no static evidence for an online-player gate on the invader path turned up. The only online-player predicates in the binary are `IsExistPlayer` and the guild auto-reset pair above -- none of them near the invader manager.
+  Confirming it is cheap now: read `UnderRaidBaseCampIds` on a guild whose members are all offline and see whether it ever becomes non-empty. Until that runs, treat the claim as the reason to **defer** Feature 2, not as proof it is unnecessary.
+- Whether any of the above is reachable, and writable, from UE4SS Lua.
+- Whether `TryMoveCharacterToContainerFrom`'s `OutContainer` is a genuine out-param. If it is, out-param marshalling silently yields nothing here, exactly as it does for `TryGetModel`.
+
 ## Platform
 
 | Fact | Confidence |
