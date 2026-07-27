@@ -484,14 +484,21 @@ local function palSnapshot(param)
         -- base stat and does not move when CraftSpeedRates changes, so it is the
         -- wrong thing to log here.
         workSpeed   = firstOf(param, { "GetCraftSpeed_withBuff" }),
+        -- Level and Exp, read straight off the save parameter. These exist to answer
+        -- a specific fairness question: does a suppressed pal still gain experience?
+        -- Freezing production but not levelling would still let an offline guild
+        -- advance for free. SetDisableNaturalUpdate's collateral scope is
+        -- uncatalogued and exp was never measured, so measure it rather than assume.
+        level       = try(function() return param.SaveParameter.Level end),
+        exp         = try(function() return param.SaveParameter.Exp end),
     }
 end
 
 local function fmtSnapshot(s)
-    return string.format("stomach=%s/%s decay=%s san=%s/%s hunger=%s sick=%s speed=%s",
+    return string.format("stomach=%s/%s decay=%s san=%s/%s hunger=%s sick=%s speed=%s lvl=%s exp=%s",
         str(s.stomach), str(s.maxStomach), str(s.decayRate),
         str(s.sanity), str(s.maxSanity), str(s.hungerType), str(s.workerSick),
-        str(s.workSpeed))
+        str(s.workSpeed), str(s.level), str(s.exp))
 end
 
 local function freezeHunger(param, on)
@@ -1388,6 +1395,42 @@ end
 -- only evidence of whether our code was even running. "LOGIN HOOK fired" with no
 -- matching "LOGIN HOOK done" means the crash was inside our sweep; neither line
 -- means the crash was somewhere else entirely.
+-- Follow-up sweeps after a login, and why they are needed.
+--
+-- The hook fires on possession, but the guild's own EPalGuildPlayerStatus flips to
+-- Online slightly AFTER that. So the sweep run inside the hook usually still sees
+-- the player as offline, does nothing, and the release waits for the next scheduled
+-- sweep. Measured on a live server: hook at 17:10:02, release at 17:10:22 -- a 20s
+-- wait staring at idle pals. An earlier note claiming ~8s was a favourable race.
+--
+-- These retries close that gap without shortening sweep_interval_ms, which would
+-- pay the FindAllOf cost on every tick instead of only after a login. Sweeps are
+-- idempotent, so a retry that finds nothing to do is harmless.
+local LOGIN_RETRY_MS = { 2000, 5000, 10000, 20000 }
+
+-- Guard against stacking. Each sweep does a full FindAllOf over the UObject array,
+-- so several players arriving together must not queue a burst of them -- one set of
+-- retries covers every guild anyway, because a sweep is global.
+local loginRetryPending = false
+
+local function loginRetrySweeps()
+    if loginRetryPending then return end
+    loginRetryPending = true
+    local remaining = #LOGIN_RETRY_MS
+    for _, delay in ipairs(LOGIN_RETRY_MS) do
+        -- One-shot delays only. Never LoopAsync (Rule 4).
+        ExecuteWithDelay(delay, function()
+            ExecuteInGameThread(function()
+                refreshOnlinePlayers()
+                local ok, err = pcall(sweep)
+                if not ok then log("login retry sweep error: %s", tostring(err)) end
+                remaining = remaining - 1
+                if remaining <= 0 then loginRetryPending = false end
+            end)
+        end)
+    end
+end
+
 local hooked = try(function()
     RegisterHook("/Script/Engine.PlayerController:ServerAcknowledgePossession", function()
         ExecuteInGameThread(function()
@@ -1395,7 +1438,8 @@ local hooked = try(function()
             refreshOnlinePlayers()
             local ok, err = pcall(sweep)
             if not ok then log("login-triggered sweep error: %s", tostring(err)) end
-            log("LOGIN HOOK done")
+            loginRetrySweeps()
+            log("LOGIN HOOK done (retries queued at 2s/5s/10s/20s)")
         end)
     end)
     return true

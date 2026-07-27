@@ -29,14 +29,20 @@ return {
     -- want. Every write is idempotent and reversed on login, so even needless
     -- churn is harmless.
     --
-    -- Practical floor: suppression can only be applied on a sweep, so anything
-    -- below sweep_interval_ms buys you nothing. With the default 30s sweep, 60
-    -- means protection lands within about two sweeps of the last logout.
+    -- Granularity note: suppression can only be applied on a sweep, so the real
+    -- resolution is sweep_interval_ms, not this value. With the default 30s sweep,
+    -- 15 means protection lands on the first sweep at least 15s after the last
+    -- logout -- so somewhere between 15s and 45s in practice.
+    --
+    -- Why 15 and not 60: at 60 a base keeps producing and levelling for a minute
+    -- or more after the last member leaves, which was observed in testing (a pal
+    -- levelled up during the grace window). Since every write is idempotent and
+    -- reversed on login, arming sooner costs nothing.
     --
     -- Set 0 to suppress at the first sweep after a guild goes offline.
     -- Changeable at runtime with 'stasis.grace <seconds>' (does not persist across
     -- a restart -- edit this file for that).
-    grace_seconds = 60,
+    grace_seconds = 15,
 
     -- Milliseconds between sweeps. Each sweep re-derives all state from live
     -- objects, so a longer interval only delays reaction, it never desyncs.
