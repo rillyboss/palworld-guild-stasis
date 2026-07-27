@@ -1,11 +1,10 @@
 {
   "ModName": "Guild Stasis",
   "PackageName": "GuildStasis",
-  "Thumbnail": "thumbnail.png",
   "Version": "0.2.0",
-  "DebugMode": true,
+  "DebugMode": false,
   "MinRevision": null,
-  "Author": "",
+  "Author": "rillyboss",
   "Dependencies": [
     "UE4SS"
   ],
