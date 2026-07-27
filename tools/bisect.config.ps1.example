@@ -1,24 +1,26 @@
-<#
-  Copy to nitrado.config.ps1 (gitignored) and fill in.
+﻿<#
+  Copy to bisect.config.ps1 (gitignored) and fill in.
 
-  Nitrado's FTP is PLAIN FTP on port 21, so these credentials cross the network
-  unencrypted. Treat them as low-trust: rotate them if they are ever pasted into
-  a chat, a ticket, or a log.
+  BisectHosting uses SFTP (port 2022), not plain FTP, so set Protocol = sftp.
+  The SFTP login lands directly in the game directory, so GameRoot is '.'.
+  (Nitrado differs: plain FTP on 21, and GameRoot = 'palworld'.)
 
-  The REST AdminPassword is the ONLY credential on an internet-facing API whose
-  surface includes /shutdown, /kick and /ban. Use something long and unique.
+  Requires: Install-Module Posh-SSH -Scope CurrentUser
 #>
 @{
-    # FTP (Nitrado panel -> FTP details)
-    FtpHost = 'your-bisect-ftp-host'
-    FtpUser = 'your-bisect-ftp-user'
-    FtpPass = 'CHANGEME'
+    Protocol = 'sftp'
 
-    # Root of the exposed game tree. On Nitrado this is 'palworld' and only
-    # Pal/Saved beneath it is actually accessible.
-    GameRoot = 'palworld'
+    SftpHost = 'gamesdalXX.bisecthosting.com'
+    SftpPort = 2022
+    SftpUser = 'yourname.xxxxxxxx'
+    SftpPass = 'CHANGEME'
 
-    # Palworld REST API: http://<server ip>:<RESTAPIPort>
-    RestBase      = 'http://X.X.X.X:17143'
+    # SFTP login is already at the game root on Bisect.
+    GameRoot = '.'
+
+    # Palworld REST API. Port comes from RESTAPIPort in PalWorldSettings.ini,
+    # and AdminPassword is host-generated - read it from that file rather than
+    # assuming it matches your old host.
+    RestBase      = 'http://X.X.X.X:9007'
     AdminPassword = 'CHANGEME'
 }

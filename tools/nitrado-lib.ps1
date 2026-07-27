@@ -183,6 +183,14 @@ function Use-PalHost {
     return $cfg
 }
 
+# Inject a config directly, bypassing the FTP-key validation above. Used by
+# palhost.ps1 so an SFTP-only host config can still reuse the shared helpers
+# (Test-PalSaveFile, Invoke-PalRest) without pretending to have FTP details.
+function Set-PalHostConfig {
+    param([Parameter(Mandatory)][hashtable]$Config)
+    $script:NitradoCfg = $Config
+}
+
 #-------------------------------------------------------------------------------
 # Upload
 #-------------------------------------------------------------------------------
