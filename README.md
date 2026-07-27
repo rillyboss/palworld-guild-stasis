@@ -35,7 +35,31 @@ If you consider that unbalanced, that's what the v2 work targets: parking the Pa
 
 - **A Windows dedicated server.** Not optional. Pocketpair's docs: *"At this time, server-side mods work only on the dedicated server with Windows edition."* UE4SS has no Linux support, and Palworld 1.0 under Proton has a documented save-corruption bug.
 - **UE4SS**, Okaetsu's `experimental-palworld` build. Verified: `UE4SS-Palworld.zip`, commit `c838a8ac`, SHA256 `768A45718FBB9E429AC5CC3CE4A139A1B7B468BFF31B4A136AE483D725ACA1CA`. The release *tag* is dated 2025-02-20 but the tag is rolling — pin the hash, not the tag.
-- File access to the server, and the ability to restart it.
+- **Write access to `Pal/Binaries/Win64` (or the server root)**, and the ability to restart. This is the requirement that actually disqualifies most rented hosting — see below.
+
+### Hosting compatibility
+
+Check this **before** anything else, because it's a hard gate.
+
+You need to be able to write files *outside* `Pal/Saved`. Both install routes do:
+
+- Manual → `Pal/Binaries/Win64/dwmapi.dll` + `ue4ss/`
+- Official loader → `Mods/PalModSettings.ini` + `Mods/Workshop/`
+
+**Verified incompatible: Nitrado.** Its FTP exposes only `Pal/Saved`. Confirmed with retries — the other directories don't appear in a listing of their own parent, so this isn't a permissions quirk you can work around:
+
+```
+/palworld              -> only "Pal"
+/palworld/Pal          -> only "Saved"
+/palworld/Pal/Binaries -> not accessible
+/palworld/Mods         -> not accessible
+```
+
+The server *build* is fine (`Pal/Saved/Config/WindowsServer/` confirms Windows edition) and `PalWorldSettings.ini` is writable — but there is nowhere to put UE4SS. Nitrado's own FAQ says Palworld mods aren't supported yet, which matches.
+
+Quick test for any host: list `Pal/Binaries/Win64` over FTP. If you can't see it, you can't run this mod there.
+
+Note that no global setting substitutes for this mod. `PalStomachDecreaceRate` is server-wide, and there is **no SAN setting in Palworld at all** — so a host that blocks file access blocks the only mechanism that exists.
 
 ## Install
 

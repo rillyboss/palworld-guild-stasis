@@ -36,3 +36,7 @@ desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# Nitrado credentials and captured backups - never commit
+tools/nitrado.config.ps1
+backups/
