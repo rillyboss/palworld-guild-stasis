@@ -321,6 +321,25 @@ Two rules earned the hard way:
 
 On a headless server neither `CheatManagerEnablerMod` nor `Keybinds` has any purpose, so leaving them off is still right -- just not because either caused this.
 
+#### A suppressed Pal earns no XP, and the test needed a positive control to say so
+
+Two earlier attempts at this were worthless, and the reason is worth keeping. Both showed the suppressed Pal's exp static, which proves nothing on its own: base-Pal XP is granted on **work completion**, so it is bursty rather than continuous, and in both windows the *control* Pals happened to earn nothing either. "Neither moved" is not evidence.
+
+The valid run, over ten minutes with one guild online and working and one suppressed:
+
+```
+                    17:21              17:31            delta
+control slot 1      lvl=6 exp=275      lvl=7 exp=371    +96, levelled
+control slot 2      lvl=6 exp=295      lvl=7 exp=391    +96, levelled
+suppressed          lvl=4 exp=123      lvl=4 exp=123    0
+```
+
+Same world, same interval, `speed_zero=1` and `write_errors=0` throughout. So zero work speed means zero work completions means zero XP.
+
+The same window is the best evidence collected for the other two levers as well. The suppressed Pal's stomach read `71.698272705078` at both ends, identical to the digit, and its SAN held at `100.0` while the working control's fell from `98.2` to `79.4`. That last figure is worth remembering as the scale of what the mod prevents: roughly 19 SAN points per ten minutes on a hard-working Pal, which is why SAN and not starvation is the harm that actually bites.
+
+**Lesson worth more than the measurement:** a freeze test needs a control that is demonstrably moving. Without one, "the value did not change" is indistinguishable from "nothing was happening anywhere".
+
 #### Hunger, measured
 
 Read across every container on a live world: every Pal reported `decayRate=1.0` and `disableNaturalUpdate=false` while its guild was online, with `PalStomachDecreaceRate=1.000000` in the ini. Party Pals sat at `100.0/100.0` while a base Pal in the same guild sat at `0.0/100.0`, so decay is real and the difference is food access, not decay rate. Useful as a baseline: **a suppressed Pal must read `decayRate=0.0`, and anything else in a party container is a bug.**

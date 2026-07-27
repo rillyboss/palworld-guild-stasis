@@ -43,10 +43,13 @@ Working and measured:
 - **Work speed reaches zero for every suitability.** Not just handiwork: all thirteen read a final speed of `0`, including the three a Lamball actually has ranks in. Observed at a workbench with the progress slider frozen for over ten minutes.
 - **Reversal is exact.** Each Pal returns to its own original speed, `70` and `77` respectively, because release removes the mod's multiplier rather than restoring a remembered number. There is nothing stored that could be lost or mismatched.
 - **Per-guild isolation, proven in both directions.** Two Pals written for one guild, one for the other, never three, and each camp written only while its own guild was offline.
+- **No XP either.** Over a ten minute window, two working Pals in an online guild each gained 96 XP and a level, while a suppressed Pal in another guild gained exactly zero. Same world, same ten minutes.
 - **Nothing persists.** After a save and restart, every write is gone and the Pals read normal values.
 - Zero write errors across roughly 130 write cycles.
 
-Still unverified: durability beyond about 20 minutes, since no overnight soak has been run, and the full collateral scope of `SetDisableNaturalUpdate`. Whether a suppressed Pal still earns XP is also open. It held static across every window observed, and zero work speed means no work completions to earn from, but no test yet had a control that was demonstrably earning at the same time.
+For scale on what this prevents: during that same window the working control Pal's SAN fell from 98.2 to 79.4, about 19 points in ten minutes, while the suppressed Pal held at 100.0 and its stomach read `71.698272705078` at both ends of the window. SAN, not starvation, is the fast-moving harm.
+
+Still unverified: durability beyond about 20 minutes, since no overnight soak has been run, and the full collateral scope of `SetDisableNaturalUpdate`.
 
 ## Requirements
 

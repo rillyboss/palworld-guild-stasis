@@ -33,7 +33,11 @@ was backwards.
   rather than growing the array
 - per-guild isolation held throughout, `write_errors=0`
 - observed in game: Pals walk to a station, play the work animation, and produce
-  nothing
+  nothing, then give up and fall asleep in daylight
+- **no XP either**, measured against a positive control: over ten minutes two working
+  Pals in an online guild each gained 96 XP and a level, while a suppressed Pal gained
+  exactly zero. Its stomach also read `71.698272705078` at both ends of the window,
+  and its SAN held at 100.0 while the working control's fell from 98.2 to 79.4
 
 ### Fixed
 
