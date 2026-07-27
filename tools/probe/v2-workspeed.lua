@@ -44,7 +44,7 @@
 --             2. Set the existing CraftSpeedRates entry's value to 0.0 and read
 --                craft speed back. This is the only nested write in the boot, which
 --                keeps a native access violation attributable.
-local WRITE_VARIANT = "mutate"
+local WRITE_VARIANT = "read"
 
 -- Round-tripped on the hunger container during the learn phase, then removed.
 local PROBE_KEY = "GuildStasis_Probe"
@@ -276,6 +276,48 @@ local function run()
     readSpeeds(param, "BEFORE")
 
     if WRITE_VARIANT == "read" then
+        -- Sweep EVERY worker Pal, not just the first. This is the persistence check:
+        -- if a 0.0 entry written in a previous boot is gone, CraftSpeedRates is
+        -- session state like its hunger sibling, and v2 needs no restore map at all.
+        -- Which Pal gets picked first varies between boots, so check them all.
+        log("--- persistence check: CraftSpeedRates across every worker Pal")
+        local camps = try(function() return FindAllOf("PalBaseCampModel") end) or {}
+        local seen, dirty = 0, 0
+        for i = 1, #camps do
+            local m = camps[i]
+            if alive(m) and not isCDO(m) then
+                local wd = try(function() return m.WorkerDirector end)
+                local cc = alive(wd) and try(function() return wd.CharacterContainer end) or nil
+                local slots = alive(cc) and try(function() return cc.SlotArray end) or nil
+                local sn = slots and (try(function() return slots:GetArrayNum() end) or 0) or 0
+                for si = 1, sn do
+                    local raw = try(function() return slots[si] end)
+                    local sl = try(function() return raw:get() end) or raw
+                    local h = alive(sl) and try(function() return sl.Handle end) or nil
+                    if alive(h) then
+                        local a, b = try(function() return h:TryGetIndividualParameter() end)
+                        local pp = alive(a) and a or (alive(b) and b or nil)
+                        if alive(pp) then
+                            seen = seen + 1
+                            local spp = try(function() return pp.SaveParameter end)
+                            local c = spp and try(function() return spp.CraftSpeedRates end) or nil
+                            local n2 = dumpContainer(c, string.format("camp %d slot %d CraftSpeedRates", i, si))
+                            if type(n2) == "number" and n2 > 0 then dirty = dirty + 1 end
+                            local eff = try(function() return pp:GetCraftSpeed_withBuff() end)
+                            log("        GetCraftSpeed_withBuff=%s", tostring(eff))
+                        end
+                    end
+                end
+            end
+        end
+        log("--- %d worker Pal(s) checked, %d with a non-empty CraftSpeedRates", seen, dirty)
+        if dirty == 0 then
+            log("--- CraftSpeedRates entries did NOT survive the restart: session state,")
+            log("    exactly like DecreaseFullStomachRates. v2 needs no restore map.")
+        else
+            log("--- entries SURVIVED. CraftSpeedRates persists, so v2 needs explicit")
+            log("    cleanup on boot and the no-persistence guarantee is broken.")
+        end
         log("=== read-only pass complete. Nothing written. ===")
         return
     end
@@ -346,9 +388,22 @@ local function run()
         if not appended then
             log("--- verdict: append did not land. Without a SetCraftSpeedRates UFunction")
             log("    this route needs a way to grow the array that Lua does not offer here.")
-        else
-            log("--- verdict: compare AFTER against BEFORE. Unchanged speeds mean the")
-            log("    container does not gate work speed, and the route is dead.")
+            return
+        end
+        log("--- verdict: compare AFTER against BEFORE. Unchanged speeds mean the")
+        log("    container does not gate work speed, and the route is dead.")
+
+        -- Restore, by zeroing our entry's effect rather than leaving it at 0.0.
+        -- An earlier version of this probe returned here and left a Pal stuck at
+        -- craft speed 0, which is exactly the kind of leftover a test tool must not
+        -- create. Removing an array element from Lua is not obviously possible, so
+        -- neutralise instead: 1.0 is the identity value for this container.
+        local raw0 = try(function() return values[1] end)
+        local el0 = try(function() return raw0:get() end) or raw0
+        if el0 ~= nil then
+            local ok = try(function() el0.Value = 1.0; return true end)
+            log("--- neutralised our entry to 1.0 (ok=%s)", tostring(ok))
+            readSpeeds(param, "RESTORED")
         end
         return
     end

@@ -55,7 +55,47 @@ Keeping the distinction straight matters for whoever reads this next: parking is
 
 The cost of this being dead: v2 loses the free SAN regeneration and sickness cure that made the Pal Box so attractive, so the sickness question below reopens.
 
-### A fourth candidate, and the best-shaped one: CraftSpeedRates
+### THE MECHANISM: CraftSpeedRates, verified on a live server
+
+**Status: works, verified by readback, and it preserves v1's no-persistence guarantee.**
+
+```
+BEFORE   GetCraftSpeed=70   GetCraftSpeed_withBuff=70   GetCraftSpeedSickRate=1.0
+AFTER    GetCraftSpeed=70   GetCraftSpeed_withBuff=0    GetCraftSpeedSickRate=0.0
+```
+
+Appending `{ Key = FName("GuildStasis_Offline"), Value = 0.0 }` to `SaveParameter.CraftSpeedRates.Values` was accepted, read back as one entry at `0.0`, and dropped effective craft speed from 70 to **0**. `GetCraftSpeed` stays at 70 because that is the base stat before rates; `_withBuff` is the computed value and it is what went to zero.
+
+**And the entries do not persist.** After a restart, all three worker Pals read `CraftSpeedRates: 0 entry(s)` with craft speed back to 70/77/70 -- including a Pal that had been left at `0.0` by a probe bug. So this is session state exactly like `DecreaseFullStomachRates`, which means:
+
+- no restore map, no fingerprint anchor, no state on disk
+- no boot-time cleanup pass -- a crash mid-suppression self-heals
+- **v1's "nothing written persists to the save file" guarantee survives v2**
+
+Every other candidate broke that guarantee. This one has a blast radius no larger than what is already in production, and it touches no player configuration at all.
+
+Implementation shape:
+
+```
+suppress:  find our entry in CraftSpeedRates.Values by Key; set Value = 0.0
+           if absent, append { Key = FName(SUPPRESS_KEY), Value = 0.0 }
+release:   find our entry; set Value = 1.0   (1.0 is this container's identity)
+```
+
+Find-then-append keeps it idempotent across sweeps rather than growing the array. Element removal from Lua is not established, so release neutralises to `1.0` instead of deleting -- harmless, and the entry vanishes on restart anyway.
+
+Two things still to prove, and both are behavioural rather than mechanical:
+
+1. **M7/M10.** Craft speed 0 is a *stat* reading. It has to be confirmed that Pals actually stop and that output is zero, not merely slow. Note `GetCraftSpeedByWorkSuitability(Handcraft)` did **not** move (stayed 50), so which getter the work system actually consumes is not yet established.
+2. Whether non-crafting work -- hauling, transport, watering -- is gated by craft speed at all. A Pal that still carries items while producing nothing would satisfy the goal, but that needs observing rather than assuming.
+
+### How this was found, and the earlier framing that was wrong
+
+The three candidates below were all attempts to *command a Pal to stop working*. None of them worked, and the search only succeeded after reframing the question as **make the work take infinitely long** instead. That reframing came from the server owner, not from the API hunt.
+
+Worth remembering next time: when every lever for "make X stop" is closed, ask what makes X pointless instead.
+
+### The earlier candidate, kept for the record: CraftSpeedRates rationale
 
 Found by asking the obvious question nobody had asked -- instead of stopping the work, set the work *speed* to zero.
 
@@ -191,14 +231,20 @@ Three candidate mechanisms for Feature 1 have been eliminated on evidence, none 
 
 | Mechanism | Verdict | Basis |
 |---|---|---|
+| **`CraftSpeedRates`** | **WORKS.** Craft speed 70 -> 0, and entries do not persist | verified live, with readback and a restart check |
 | `CurrentOrderType` | dead. Wrong thing entirely -- a battle order, and it persists | binary enum + `OrderCommand(OrderType)` signature |
 | Pal Box parking | dead. No reflected mutator exists; forcing it risks losing Pals | full class-chain enumeration at runtime |
-| **`CraftSpeedRates`** | **best candidate.** Same container type as v1's proven lever, and probably non-persistent | struct enumerated; append + effect both unproven |
-| `OffWorkSuitabilityList` | fallback. Now reachable after a name fix, but silent failure mode | `WorkSuitabilityOptionInfo` confirmed real |
+| `OffWorkSuitabilityList` | unnecessary now. Reachable after a name fix, but silent failure mode | `WorkSuitabilityOptionInfo` confirmed real |
 
 Feature 2 went the other way: it is probably unnecessary, and if it is needed the hook to build it on now exists.
 
-The next concrete step is **not** production code. It is `tools/probe/v2-workspeed.lua`, which asks whether an entry can be added to `CraftSpeedRates` and whether a `0.0` entry actually zeroes work speed. If yes, v2 gets a mechanism with a smaller blast radius than anything previously considered -- possibly small enough to keep v1's no-persistence guarantee. If no, fall back to M7 + M10 behind `stop_work_when_offline`.
+**The next step is production code**, which is a change from every previous revision of this plan. The mechanism is settled; what remains is:
+
+1. Wire `CraftSpeedRates` into the sweep beside `freezeHunger`, same shape, same FName key, reversed on login.
+2. Prove M7 and M10 behaviourally -- Pals observed idle, output measured at zero.
+3. Retire `stop_work_when_offline` and its off-work-list code, or keep it clearly marked as an unused fallback. Do not ship two mechanisms.
+
+Because the writes are session state, v2 no longer needs M8's restore map, M11's partial-failure handling is trivial (a failed write leaves a Pal working, which is v1 behaviour), and the README's "nothing persists" claim stands unchanged.
 
 ## The sickness question, reopened
 

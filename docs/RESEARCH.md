@@ -217,6 +217,40 @@ Prefer `GetContainer` over `TryGetContainer`: the latter returns its container t
 - `EPalBaseCampWorkerDirectorState { Init, WaitForLoadingAround, Active }` is the `State` property's enum. It is a **lifecycle**, not a work policy. Writing it would repeat the `CurrentOrderType` mistake.
 - Other enums seen: `EPalBaseCampWorkerWalkAroundState { WalkAround, Rest }`.
 
+#### CraftSpeedRates zeroes work speed, and does not persist
+
+The v2 stop-work mechanism, verified live with readback and a restart check.
+
+`FPalIndividualCharacterSaveParameter` holds three sibling `FFloatContainer`s, and the third is work speed:
+
+```
+DecreaseFullStomachRates   <- v1's proven hunger lever
+AffectSanityRates
+CraftSpeedRates            <- work speed
+FloatContainer           { Values : TArray<FloatContainer_FloatPair> }
+FloatContainer_FloatPair { Key : FName, Value : float }
+```
+
+There is **no** `SetCraftSpeedRates` UFunction -- the class exposes a setter and remover for the hunger container only, confirmed by enumerating every function on it. So the entry has to be added by direct array write, and `.Values` is normally empty because entries exist only while something applies a rate. Both worked:
+
+```
+append { Key = FName("GuildStasis_Offline"), Value = 0.0 } at index 1  -> accepted, length 1
+GetCraftSpeed_withBuff   70 -> 0
+GetCraftSpeedSickRate   1.0 -> 0.0
+GetCraftSpeed             70 -> 70    (base stat, before rates -- expected)
+GetCraftSpeedByWorkSuitability(Handcraft)  50 -> 50   (did NOT move -- see caveat)
+```
+
+**Entries do not survive a restart.** After a reboot, all three worker Pals read `CraftSpeedRates: 0 entry(s)` with craft speed back to 70/77/70 -- including one deliberately left at `0.0`. So it is session state exactly like `DecreaseFullStomachRates`, which means v2 needs no restore map, no fingerprint, no disk state, and no boot cleanup, and **v1's no-persistence guarantee holds**.
+
+Caveats, so this is not over-claimed:
+
+- `GetCraftSpeedByWorkSuitability` did not change, so which getter the work system actually consumes is unestablished. The stat moved; the *behaviour* has not been observed yet. That is M7/M10.
+- Whether hauling and transport are gated by craft speed at all is unknown.
+- A `1.0` entry is the container's identity value, so release can neutralise rather than delete. Removing an array element from Lua is not established.
+
+The reframing that found it is worth more than the finding: every attempt to *command a Pal to stop working* failed, and the answer came from asking how to make the work take infinitely long instead.
+
 #### Passing a Lua string where an FName is expected kills the server
 
 Six identical crashes, all `EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000070` with a callstack of nothing but `UE4SS` frames.
