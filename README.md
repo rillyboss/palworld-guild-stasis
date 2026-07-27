@@ -25,11 +25,26 @@ Verified on a live Windows dedicated server (app 2394010, build `24181105`, `v1.
 
 Not yet verified: durability beyond ~20 minutes (no overnight soak), and the full collateral scope of `SetDisableNaturalUpdate`.
 
-## Known tradeoff in v1
+## No free production (v0.2.0)
 
-Suppressed Pals **keep working**. They haul, they craft, they produce — they just never get hungry and never lose SAN. So an offline base keeps generating output with no upkeep, which is arguably better than being online.
+Earlier versions left suppressed Pals **working** — they hauled, crafted and produced, they just never got hungry. An offline base generated output with no upkeep, which is better than being online and backwards.
 
-If you consider that unbalanced, that's what the v2 work targets: parking the Pals in the guild's Pal Box so they're genuinely inert. Not solved yet, and it is a bigger change than v1 because it moves save data — see `docs/V2-PLAN.md`. The companion idea of blocking raids on a defenceless guild is deferred: raids may simply not fire against a fully-offline guild, which would make it unnecessary.
+`zero_work_speed` fixes that. While a guild is suppressed, every one of its base Pals has its effective work speed set to zero, so the base produces **nothing**. Verified on a live server:
+
+```
+suppress   speed 70 -> 0    and  77 -> 0      decay 2.0 -> 0.0
+release    speed    -> 70   and     -> 77     each Pal's own original value
+restart    entries gone entirely
+```
+
+Two properties make this cheap rather than risky:
+
+- **Nothing persists.** The write is session state, like the hunger freeze. There is no restore map, no per-Pal fingerprint, no state on disk. A crash or a hard kill mid-suppression self-heals on the next boot, and uninstalling still leaves no trace in the save.
+- **Nothing is stored to restore.** Release neutralises the mod's own multiplier and each Pal's speed recovers by itself, so there is no saved value that can be lost or mismatched.
+
+What it looks like in game: Pals still walk to their stations and play the work animation, they just make no progress. Functionally inert, visually busy. Making them stand still would require rewriting each Pal's job configuration in the save file, which risks silently destroying player settings — not worth it.
+
+Raids on a defenceless offline guild are deliberately **not** addressed: raids appear not to fire against a guild with nobody online, which would make it unnecessary. Unconfirmed, and tracked as M9 in `docs/V2-PLAN.md`.
 
 ## Requirements
 
@@ -141,7 +156,8 @@ Runtime changes do **not** persist across a restart. Edit `config.lua` for that.
 | `sanity_mode` | `"natural_update"` | How SAN is handled. `"natural_update"` is the **verified** option (`SetDisableNaturalUpdate`, a plain reflected UFUNCTION). `"none"` leaves SAN alone. `"disable_flags"` and `"topup"` are alternatives kept for hosts where the verified one misbehaves — see `docs/RESEARCH.md`. |
 | `topup_once_on_offline` | `true` | On the offline transition, top SAN up once. A hunger-frozen Pal never eats, so the eat-driven SAN recovery path never fires again — without this, a guild that logs off with miserable Pals stays miserable forever. Set `false` if you consider it too generous. |
 | `topup_below_ratio` | `0.9` | Only used when `sanity_mode = "topup"`. Top up when SAN falls below this fraction of the Pal's maximum. Expressed as a ratio deliberately: `MaxFullStomach` varies 100–600 by species, so absolute thresholds are wrong. |
-| `stop_work_when_offline` | `false` | **Experimental and incomplete — leave off.** Would park Pals so an offline base produces nothing. Restoring each Pal's original work configuration needs a fingerprint-keyed map that isn't built yet, and getting it wrong loses players' per-Pal settings. Tracked in `docs/V2-PLAN.md`. |
+| `zero_work_speed` | `true` | Sets each suppressed Pal's effective work speed to zero, so an offline base produces nothing. Inserts a `0.0` entry under the mod's own FName key into `SaveParameter.CraftSpeedRates` — same container shape and same "0.0 wins" rule as the hunger lever. Verified `70 → 0` and back. Session state only: nothing persists, and no restore map is needed. |
+| `stop_work_when_offline` | `false` | **Superseded by `zero_work_speed` — leave off, and never enable both.** The older route, which rewrites each Pal's off-work job list. It writes to the save file, its restore path is unimplemented, and getting it wrong silently destroys players' per-Pal work settings. Kept only as a fallback if a game patch breaks the `CraftSpeedRates` route. |
 
 ### Diagnostics
 

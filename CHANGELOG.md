@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.2.0 - 2026-07-27
+
+Stasis now means no production. While a guild is suppressed, every one of its base
+Pals has its effective work speed set to zero, so an offline base generates nothing.
+
+Before this, suppressed Pals kept hauling and crafting while never getting hungry,
+so an offline base produced output with no upkeep -- better than being online, which
+was backwards.
+
+### Added
+
+- `zero_work_speed` (default `true`). Inserts a `0.0` entry under the mod's own
+  FName key into each Pal's `SaveParameter.CraftSpeedRates` -- the same container
+  shape and the same "0.0 wins" rule as the existing hunger lever.
+- `speed_zero` on the `HEARTBEAT` line, and `speed_zero` / `speed_nonzero` per guild
+  in the status JSON. If `speed_zero` lags `pals_written`, the lever is not landing.
+- `speed=` in every per-Pal log line, reporting `GetCraftSpeed_withBuff` -- the
+  computed value. `GetCraftSpeed` is the base stat and does not move when the rate
+  changes, so it would be the wrong thing to log.
+- `LOGIN HOOK fired` / `LOGIN HOOK done` markers. A native access violation cannot
+  be caught by pcall, so a crash inside the login sweep would otherwise be
+  indistinguishable from a crash anywhere else.
+
+### Verified on a live dedicated server
+
+- suppress: computed speed `70 -> 0` and `77 -> 0`; hunger decay `2.0 -> 0.0`
+- release: each Pal back to **its own** original speed, `70` and `77`
+- restart: `CraftSpeedRates` entries gone entirely -- session state, like the hunger
+  write, so nothing persists and no restore map is needed
+- idempotent across sweeps: the first sweep appends one entry, later sweeps reuse it
+  rather than growing the array
+- per-guild isolation held throughout, `write_errors=0`
+- observed in game: Pals walk to a station, play the work animation, and produce
+  nothing
+
+### Fixed
+
+- The member holding the vanilla off-work list was guessed under three wrong names.
+  It is `WorkSuitabilityOptionInfo`, so `stop_work_when_offline` could never have
+  worked. That route is now superseded by `zero_work_speed` and stays off by default.
+
+### Notes
+
+- `stop_work_when_offline` is superseded. It writes to the save file and cannot
+  restore itself. Do not enable both; the mod warns at startup if you do.
+- Pals remain visually active while producing nothing. Making them stand still would
+  mean rewriting per-Pal job configuration in the save, which risks silently
+  destroying player settings.
+- Two mechanisms were eliminated on evidence before this one: `CurrentOrderType` is a
+  battle order that persists to the save, and Pal Box parking has no reflected
+  mutator anywhere in the container chain. See `docs/V2-PLAN.md`.
+
 ## 0.1.0 — 2026-07-26
 
 First release. Freezes hunger and SAN for a guild's base Pals while every member of that guild is offline, per-guild, server-side.

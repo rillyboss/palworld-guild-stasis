@@ -57,7 +57,21 @@ The cost of this being dead: v2 loses the free SAN regeneration and sickness cur
 
 ### THE MECHANISM: CraftSpeedRates, verified on a live server
 
-**Status: works, verified by readback, and it preserves v1's no-persistence guarantee.**
+**Status: SHIPPED in v0.2.0. Verified end to end on a live server, including reversal.**
+
+The full cycle, driven through the admin command channel so the transitions could be forced with one account:
+
+```
+suppress   speed 70 -> 0    and 77 -> 0     decay 2.0 -> 0.0
+release    speed    -> 70   and    -> 77    each Pal's OWN original value
+restart    CraftSpeedRates entries gone entirely
+```
+
+Release needs no stored value: neutralising the mod's own entry to `1.0` lets each Pal's computed speed recover by itself. There is nothing saved that can be lost or mismatched, which is why this route has no restore map at all.
+
+Observed in game: a Pal walks to its station, plays the work animation, and produces nothing. Functionally inert, visually busy.
+
+Everything below was the analysis that led here, kept because the reasoning matters more than the conclusion.
 
 ```
 BEFORE   GetCraftSpeed=70   GetCraftSpeed_withBuff=70   GetCraftSpeedSickRate=1.0

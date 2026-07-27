@@ -76,8 +76,35 @@ return {
     topup_once_on_offline = true,
 
     ----------------------------------------------------------------------------
-    -- STOP WORK (experimental -- read this before enabling)
+    -- STOP WORK
     ----------------------------------------------------------------------------
+    -- Set every suppressed pal's effective work speed to zero, so an offline base
+    -- produces nothing. This is what makes stasis mean inert rather than just
+    -- "well fed": without it, an offline guild keeps generating output with no
+    -- upkeep, which is better than being online and backwards.
+    --
+    -- How it works: insert a 0.0 entry under our own FName key into the pal's
+    -- SaveParameter.CraftSpeedRates -- the same container shape, and the same
+    -- "0.0 wins" rule, as the hunger lever above. Verified on a live 1.0 server:
+    -- computed craft speed went 70 -> 0, and the entry does NOT survive a restart.
+    --
+    -- Why it is safe to leave on: nothing persists to the save file. There is no
+    -- restore map, no per-pal fingerprint, and no state on disk. A crash or a
+    -- forced kill mid-suppression self-heals on the next boot, and uninstalling
+    -- the mod leaves no trace. It also touches no player configuration.
+    zero_work_speed = true,
+
+    ----------------------------------------------------------------------------
+    -- STOP WORK, the old route (superseded -- leave this off)
+    ----------------------------------------------------------------------------
+    -- Superseded by zero_work_speed above, which achieves the same goal without
+    -- writing anything persistent. Kept only as a fallback in case a game patch
+    -- breaks the CraftSpeedRates route.
+    --
+    -- Do not enable both. This one writes to the save file, its restore path is
+    -- unimplemented, and its failure mode is silent loss of the player's per-pal
+    -- job configuration.
+    --
     -- Park the guild's pals by adding every work suitability to their vanilla
     -- off-work list while the guild is offline, then restoring it on login.
     --
