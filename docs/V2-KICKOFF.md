@@ -37,6 +37,8 @@ Paste this into a fresh session to start v2 work. It is written to be self-conta
 > 2. **UE4SS does not surface UFunctions as Lua `function` values.** A `type(obj[name]) == "function"` guard silently skips every method. Call `obj[name](obj)` inside a pcall.
 > 3. **Verify effects, not success messages.** Every write should be read back. Several v1 "successes" were false.
 > 4. **A successful readback of an enum property proves the write landed, not that the value means anything.** UE stores the raw byte. `CurrentOrderType` accepted and echoed `3` when the enum has only three enumerators, 0 to 2. That false positive is what sent v2 down a dead end.
+> 5. **Wrap every NameProperty argument in `FName(...)`.** Passing a bare Lua string makes UE4SS dereference null at offset `0x70`, and `pcall` cannot catch it -- the server dies outright. This cost six crashes and two misdiagnoses. `main.lua` gets it right in `freezeHunger()`; copy that form.
+> 6. **Change one variable per boot when hunting a native crash.** A test that disables two suspects at once attributes nothing, however convincing it looks. And "what logged last" does not locate a native crash -- bracket the suspect code with before/after markers instead.
 >
 > **Test on a throwaway server, never production.** `tools/setup-local-testserver.ps1` stands up a local Windows one, and it is already installed at `D:\SteamLibrary\steamapps\common\PalServer`. The production server is on BisectHosting (SFTP 2022, `GameRoot = '.'`, UE4SS pre-installed) -- do not experiment there. v2 moves save data, so a bad run outlives a restart.
 >

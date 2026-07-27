@@ -217,18 +217,35 @@ Prefer `GetContainer` over `TryGetContainer`: the latter returns its container t
 - `EPalBaseCampWorkerDirectorState { Init, WaitForLoadingAround, Active }` is the `State` property's enum. It is a **lifecycle**, not a work policy. Writing it would repeat the `CurrentOrderType` mistake.
 - Other enums seen: `EPalBaseCampWorkerWalkAroundState { WalkAround, Rest }`.
 
-#### CheatManagerEnablerMod crashes the dedicated server on login
+#### Passing a Lua string where an FName is expected kills the server
 
-Three identical crashes inside ten minutes, all `EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000070` with a callstack of nothing but `UE4SS` frames, each one on a player logging in.
+Six identical crashes, all `EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000070` with a callstack of nothing but `UE4SS` frames.
 
-Cause: UE4SS's bundled `CheatManagerEnablerMod` was left enabled from the earlier experiment that established `UPalCheatManager` **does not exist in this build**. With no class to instantiate during possession, it dereferences null at a small offset. Disabling it made login clean immediately.
+Cause, once isolated: a probe called
 
-Two lessons worth more than the fix:
+```lua
+param:SetDecreaseFullStomachRates(PROBE_KEY, 0.5)      -- PROBE_KEY is a Lua string
+```
 
-- **That experiment should have been reverted when it concluded.** The note above already records that enabling the mod does not conjure the class, so it had no remaining purpose and sat there as a live landmine. Turn diagnostic mods off when you are done with them.
-- **Attributing a native crash by "what logged last" is unreliable.** A probe of ours happened to be mid-run when the third crash landed, and its last log line looked exactly like the culprit. It was a bystander -- the two earlier crashes had the same signature with that probe not even deployed. The reliable method is markers that bracket the suspect code: `LOGIN HOOK fired` with no matching `LOGIN HOOK done` proves the crash was inside our sweep, and both lines present exonerates it. `main.lua` now logs that pair, which is how this mod's login path was cleared.
+The signature is `SetDecreaseFullStomachRates( Name : NameProperty, Rate : FloatProperty )`. Given a bare string for a NameProperty, UE4SS reads an FName out of it and dereferences null at offset `0x70`. **`pcall` cannot catch it** -- it is a native access violation, so the whole server goes down. The correct form, which `main.lua` has always used in `freezeHunger()`, is:
 
-On a headless server neither `CheatManagerEnablerMod` nor `Keybinds` has any purpose. Ship with them off.
+```lua
+param:SetDecreaseFullStomachRates(FName(SUPPRESS_KEY), 0.0)
+```
+
+Any NameProperty parameter needs `FName(...)`. The same applies to a NameProperty *field* inside a struct written from a Lua table.
+
+**How this was misdiagnosed twice, which is the more useful lesson.**
+
+1. First blamed on the probe's own nested write. Wrong -- the nested write never executed; the log stopped one line earlier.
+2. Then blamed on UE4SS's bundled `CheatManagerEnablerMod`, on the theory that it had nothing to instantiate because `UPalCheatManager` does not exist in this build. Plausible, and wrong. The "clean login" test that seemed to confirm it had disabled the probe *and* that mod in the same boot, so it isolated nothing. `CheatManagerEnablerMod` was innocent.
+
+Two rules earned the hard way:
+
+- **Change one variable per boot.** A test that disables two suspects at once cannot attribute the result to either, no matter how convincing the outcome looks.
+- **"What logged last" does not identify a native crash site,** but bracketing markers do. `LOGIN HOOK fired` with no matching `LOGIN HOOK done` would prove a crash inside our sweep; both lines present exonerates it. `main.lua` logs that pair, and it did correctly clear the mod's login path -- that part of the earlier conclusion still stands.
+
+On a headless server neither `CheatManagerEnablerMod` nor `Keybinds` has any purpose, so leaving them off is still right -- just not because either caused this.
 
 #### Hunger, measured
 

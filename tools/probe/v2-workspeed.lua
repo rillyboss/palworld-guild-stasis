@@ -296,12 +296,17 @@ local function run()
     ----------------------------------------------------------------------------
     log("--- PHASE 1: learn the entry shape via the proven hunger setter")
     local rateBefore = try(function() return param:GetFullStomachDecreasingRate() end)
-    local added = try(function() param:SetDecreaseFullStomachRates(PROBE_KEY, 0.5); return true end)
-    log("    SetDecreaseFullStomachRates(%q, 0.5) returned=%s", PROBE_KEY, tostring(added))
+    -- FName(), NOT a bare Lua string. The parameter is a NameProperty, and passing
+    -- a string makes UE4SS read an FName out of it and dereference null at offset
+    -- 0x70. That is an access violation pcall CANNOT catch, so it takes the whole
+    -- server down. It crashed this probe three times before being spotted, and
+    -- main.lua has always done it correctly -- compare freezeHunger().
+    local added = try(function() param:SetDecreaseFullStomachRates(FName(PROBE_KEY), 0.5); return true end)
+    log("    SetDecreaseFullStomachRates(FName(%q), 0.5) returned=%s", PROBE_KEY, tostring(added))
     dumpContainer(try(function() return sp.DecreaseFullStomachRates end), "hunger container WITH our entry")
     local rateAfter = try(function() return param:GetFullStomachDecreasingRate() end)
     log("    decreasing rate %s -> %s", tostring(rateBefore), tostring(rateAfter))
-    try(function() param:RemoveDecreaseFullStomachRates(PROBE_KEY); return true end)
+    try(function() param:RemoveDecreaseFullStomachRates(FName(PROBE_KEY)); return true end)
     dumpContainer(try(function() return sp.DecreaseFullStomachRates end), "hunger container AFTER removal")
     log("    rate restored to %s", tostring(try(function() return param:GetFullStomachDecreasingRate() end)))
 
@@ -325,11 +330,11 @@ local function run()
     -- main.lua already uses the index-past-end idiom for a TArray, so try that with a
     -- Lua table for the struct, then fall back to slot 1.
     if type(n) ~= "number" or n < 1 then
-        log("    empty -- attempting APPEND of { Key=%s, Value=0.0 }", OUR_KEY)
+        log("    empty -- attempting APPEND of { Key=FName(%s), Value=0.0 }", OUR_KEY)
         local appended = false
         for _, idx in ipairs({ (type(n) == "number" and n + 1 or 1), 1 }) do
             local ok = try(function()
-                values[idx] = { Key = OUR_KEY, Value = 0.0 }
+                values[idx] = { Key = FName(OUR_KEY), Value = 0.0 }
                 return true
             end)
             local nowN = try(function() return values:GetArrayNum() end)
