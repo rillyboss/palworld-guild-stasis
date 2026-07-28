@@ -1,6 +1,7 @@
 {
   "ModName": "Guild Stasis",
   "PackageName": "GuildStasis",
+  "Thumbnail": "thumbnail.png",
   "Version": "0.2.0",
   "DebugMode": false,
   "MinRevision": null,
