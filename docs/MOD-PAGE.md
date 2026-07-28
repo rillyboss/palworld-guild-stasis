@@ -14,83 +14,70 @@ in Requirements after it has already not worked.
 
 ---
 
-## Description
+## The problem
 
-**Server-side mod. It installs on a Palworld dedicated server, not on your game client. Players install nothing.**
+Palworld only runs the world while somebody is connected, and that somebody is often not you.
 
-Palworld only simulates the world while someone is connected, and that someone is often not you. Another guild logs in and grinds for four hours, or just sits AFK. Your base runs the whole time. Your Pals keep working, empty the feed box, then starve, sicken and die, with nobody there to restock. You log in and spend the session mending instead of playing.
+Another guild logs on and plays for four hours, or leaves themselves standing around AFK. Your base keeps running the whole time. Your Pals work, eat through the feed box, and then start starving. They get miserable, they get sick, and some of them die. Nobody is there to feed them.
 
-Guild Stasis fixes that one guild at a time. Once every member of a guild has been offline for 15 seconds, that guild's base Pals stop getting hungry, stop losing SAN, and stop working. Every other guild is untouched.
+You log in to a mess and spend your evening nursing Pals instead of playing.
 
-Work stops too, not just hunger. Freezing hunger alone would leave an offline base producing for free, which is worse than the problem it solves. Here an offline base produces nothing: no crafting, no hauling, no farming, no XP.
+## What this does
 
-Nothing is written to the save file. Everything reverses on login, and uninstalling leaves no trace.
+While every member of a guild is offline, that guild's Pals go into stasis. They stop getting hungry, stop losing sanity, and stop working. Everyone else on the server carries on exactly as normal.
 
-## Installation instructions
+They stop working on purpose. If they only stopped getting hungry, an offline base would keep churning out goods for free, which is worse than the problem it fixes. So an offline base makes nothing at all: no crafting, no hauling, no farming, no experience.
 
-This is a UE4SS Lua mod and does nothing without UE4SS installed first.
+Everything goes back to normal within a few seconds of anyone in the guild logging in. Nothing is written to your world save, so if you ever remove the mod it leaves no trace behind.
 
-1. Install UE4SS into `<server>/Pal/Binaries/Win64/` (skip if you already have it).
+## Features
 
-2. Extract this mod so you get:
+- Hunger, sanity and work all pause while a guild is offline, and pick up again on login.
+- Offline bases produce nothing. Every job is covered, from kindling and watering through to mining, hauling and farming.
+- One guild at a time. Other guilds on the server are never touched.
+- Nothing is saved to your world file, so nothing can be corrupted and uninstalling is clean.
+- Admin commands if you want to check what the mod is doing, or force a guild in or out of stasis.
+- Writes a heartbeat to the log so you can tell at a glance that it is still working.
 
-```
-<server>/Pal/Binaries/Win64/ue4ss/Mods/GuildStasis/
-    enabled.txt
-    Scripts/main.lua
-    Scripts/config.lua
-```
+Running on a live six-guild server: 11 camps, 112 Pals, no errors.
 
-3. Add one line to `ue4ss/Mods/mods.txt`:
+## Installing it
+
+**This does not work with Vortex or any other mod manager.** Mod managers install mods into your copy of the game. This one goes on the server instead, so the files have to be copied across by hand. If you rent a server, that means your host's file manager or FTP.
+
+You also need **UE4SS** on the server first. This mod is written in Lua and UE4SS is what runs it, so on its own it does nothing. Use Okaetsu's `experimental-palworld` build, dated 2026-07-19.
+
+**Check your host first.** You need to be able to upload to the `Pal/Binaries/Win64` folder on your server. A lot of cheap hosting only gives you the save folder, which is not enough. If you cannot see that folder over FTP, this mod cannot run there. Nitrado is one that does not work.
+
+1. Put UE4SS in `Pal/Binaries/Win64/` (skip if it is already there).
+
+2. Copy this mod's folder so you end up with `Pal/Binaries/Win64/ue4ss/Mods/GuildStasis/`, containing `enabled.txt` and a `Scripts` folder.
+
+3. Open `ue4ss/Mods/mods.txt` and add this line:
 
 ```
 GuildStasis : 1
 ```
 
-Forgetting this line is the most common reason nothing happens.
+Missing this line is the most common reason nothing happens.
 
-4. Restart the server. Settings are read once at load.
+4. Restart the server.
 
-5. Check `ue4ss/UE4SS.log` for `[STASIS]` lines. You should see one `HEARTBEAT` per sweep:
+To check it worked, open `ue4ss/UE4SS.log` and look for lines starting with `[STASIS]`. One appears every minute or so saying how many guilds are protected. If they stop appearing, restart the server.
 
-```
-HEARTBEAT sweep=42 guilds=6 camps=11 protected=5 pals_written=112 speed_zero=112 write_errors=0
-```
+Settings live in `Scripts/config.lua` and every option is explained in the file. The defaults are what runs on my own server.
 
-If `speed_zero` matches `pals_written`, it is working. If the heartbeat stops appearing, restart the server: that is a known UE4SS timer bug, not a mod error.
+**One thing to change in your server settings.** If `bAutoResetGuildNoOnlinePlayers` is `True`, Palworld deletes an offline guild's base and Pals however well fed they are. This mod warns you but cannot stop it. Set it to `False`.
 
-All settings live in `Scripts/config.lua`, fully commented.
-
-## Main features
-
-- **Hunger, SAN and work all freeze** while every member of a guild is offline, and all three reverse on login.
-- **No free production.** Work speed hits zero across all thirteen suitabilities, so no output and no XP.
-- **Per guild.** Every write is per-Pal and gated on the camp's owning guild. Other guilds are never touched.
-- **Nothing written to the save.** A crash mid-suppression self-heals on the next boot. Uninstalling leaves no trace.
-- **Admin commands** over the console or a polled command file, since many host panels cannot reach a real UE console.
-- **Diagnosable remotely.** A heartbeat per sweep, a status JSON, and every write read back so the log proves it landed.
-
-Running on a live six-guild server: 11 camps, 112 Pals, zero write errors.
-
-## Requirements
-
-**UE4SS**, Okaetsu's `experimental-palworld` build (2026-07-19, commit `c838a8ac`). Not bundled here, and licensed separately.
-
-**A Windows dedicated server.** Wine-hosted Windows is fine and is confirmed working on BisectHosting. Linux builds cannot run it.
-
-**Write access to `Pal/Binaries/Win64`, and the ability to restart.** This is what disqualifies most rented hosting, so check before buying. Quick test: list that folder over FTP. If you cannot see it, your host cannot run this mod. Nitrado is confirmed incompatible.
-
-**Check one server setting.** `bAutoResetGuildNoOnlinePlayers=True` deletes an offline guild's structures and Pals no matter how well fed they are. The mod warns at startup but cannot stop it. Set it `False`.
-
-Players need nothing: no client mods, no launch arguments.
+Players install nothing, and there are no launch arguments.
 
 ## Shout outs
 
-**Fenyn / Gamestorming** for `palworld-priority-mod/docs/callpath-map.md`, an in-game verification log from a live 1.0 server. This mod's crash-safety rules come straight from it.
+**Fenyn / Gamestorming** for `palworld-priority-mod/docs/callpath-map.md`, a record of what actually works on a live 1.0 server. The rules that keep this mod from crashing came straight out of it.
 
-**JaredScar / Palworld-GuildPact**, **SSyl / DynamicBaseCount**, **PalGuildLevelSync** and **TRRabbit / bastion-orp-plugin** for prior art on per-guild server-side Lua and nested save writes.
+**JaredScar / Palworld-GuildPact**, **SSyl / DynamicBaseCount**, **PalGuildLevelSync** and **TRRabbit / bastion-orp-plugin**, for working out per-guild server-side Lua before I got there.
 
-**The UE4SS team and Okaetsu**, and **Pocketpair** for making Lua a first-party install type so none of this is a loophole.
+**The UE4SS team and Okaetsu**, and **Pocketpair** for supporting server-side mods properly.
 
 ---
 

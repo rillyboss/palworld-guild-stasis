@@ -281,3 +281,8 @@ jobs:
           category: main
           update_mod_version: 'true'
           archive_existing_version: 'true'
+          # A mod manager installs into the player's game folder. This mod belongs on a
+          # dedicated server, so a managed install puts the files somewhere they can never
+          # load and leaves the user thinking the mod is broken. Manual install only.
+          allow_mod_manager_download: 'false'
+          primary_mod_manager_download: 'false'
