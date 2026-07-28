@@ -149,6 +149,34 @@ refuses to publish while that marker is present, so the placeholder cannot ship.
 does not have. Duplicating it and validating in CI is less machinery than shipping a JSON
 parser to read one string.
 
+## Where the Nexus credentials go
+
+Split by sensitivity rather than kept in one place.
+
+| Value | Scope | Why |
+|---|---|---|
+| `NEXUSMODS_API_KEY` | **Environment** secret, in an environment named `nexus` | It can publish a file to your public mod page, so its blast radius reaches everyone who downloads it. An environment can carry protection rules; repository secrets cannot |
+| `NEXUS_FILE_ID` | Repository **variable** | Not a secret, it is printed on your own mod page. It also gates the nexus job's `if`, which is evaluated before the environment resolves, so it has to be repo-scoped |
+| `NEXUS_MOD_ID` | Repository **variable** | Same, not a secret |
+
+Create the environment at Settings, Environments, New environment, named `nexus`. Two rules
+are worth adding while you are there:
+
+- **Deployment branches and tags**, restricted to `v*`. The key is then unreachable from any
+  run that is not a real release tag.
+- **Required reviewers**, yourself. The job pauses until you approve. Worth it because
+  publishing is close to irreversible: once people have downloaded a file you cannot
+  un-download it.
+
+The two variables go under Settings, Secrets and variables, Actions. The API key goes in the
+`nexus` environment's own secrets, not the repository's.
+
+Storing the IDs as secrets instead would be worse, not safer. Secrets are masked in logs, so
+a wrong ID would show as `***` and turn a one-minute fix into a guessing game.
+
+Never paste the API key into a chat, an issue, or a commit. If it leaks, revoke it at
+nexusmods.com/settings/api-keys and issue a new one.
+
 ## Release checklist
 
 Before tagging anything:
