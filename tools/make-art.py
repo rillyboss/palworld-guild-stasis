@@ -92,6 +92,39 @@ def thumbnail(path):
     return path
 
 
+# --------------------------------------------------- Nexus listing tile 16:9
+def tile(path):
+    """Landscape tile for the mod listing card.
+
+    The square thumbnail gets letterboxed with grey bars here, because the card slot is
+    landscape. This is 16:9 so it fills the card.
+
+    It renders at roughly 380px wide in a listing, about a fifth of its real size, so
+    everything has to survive being shrunk by 5x. That means very few words and nothing
+    below about 50px. The gallery cards would be unreadable at this scale, which is why
+    this is a separate image rather than a reuse of one of them.
+    """
+    W, H = 1920, 1080
+    img = gradient(W, H)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 10], fill=ACCENT)
+
+    centre_x(d, 168, "GUILD", font(REG, 104), MUTED, W)
+    centre_x(d, 274, "STASIS", font(BOLD, 236), TEXT, W)
+
+    d.rectangle([760, 588, 1160, 596], fill=ACCENT)
+
+    # Raised and shrunk from a first attempt where the tallest Z descended into
+    # "SERVER-SIDE MOD" once the image was scaled down to listing size. x is offset
+    # right of centre because the group grows rightwards as it rises.
+    zzz(d, 850, 770, 145, ACCENT)
+
+    centre_x(d, 892, "SERVER-SIDE MOD", font(BOLD, 72), ACCENT, W)
+    centre_x(d, 980, "PALWORLD DEDICATED SERVER", font(REG, 52), MUTED, W)
+    img.save(path)
+    return path
+
+
 # ------------------------------------------------------- Nexus header 1300x372
 def header(path):
     W, H = 1300, 372
@@ -210,6 +243,7 @@ def gallery_requirements(path):
 
 
 for fn, name in [(thumbnail, "thumbnail.png"),
+                 (tile, "tile.png"),
                  (header, "header.png"),
                  (gallery_problem, "gallery-1-problem.png"),
                  (gallery_what, "gallery-2-what.png"),

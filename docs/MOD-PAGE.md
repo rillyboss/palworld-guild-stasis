@@ -130,13 +130,25 @@ editing the PNGs, so the text stays correct when the mod changes.
 | Slot | File | Size |
 |---|---|---|
 | Header | `media/header.png` | 1300x372, the size Nexus asks for |
-| Images (required) | `media/gallery-1-problem.png` | 1920x1080 |
-| Images | `media/gallery-2-what.png` | 1920x1080 |
-| Images | `media/gallery-3-requirements.png` | 1920x1080 |
-| Loader tile | `thumbnail.png` | 512x512, also shipped inside the zip |
+| Images, 1st | `media/tile.png` | 1920x1080. **This one becomes the listing card** |
+| Images, 2nd | `media/gallery-1-problem.png` | 1920x1080 |
+| Images, 3rd | `media/gallery-2-what.png` | 1920x1080 |
+| Images, 4th | `media/gallery-3-requirements.png` | 1920x1080 |
+| Loader tile | `thumbnail.png` | 512x512, shipped inside the zip for the first-party loader |
 
-Upload the gallery images **in that order**. The first one is the pitch, and it is the
-one that shows in previews.
+**Order matters, and `tile.png` has to be first.** Nexus builds the listing card from the
+first gallery image. The 512x512 `thumbnail.png` was used there originally and got
+letterboxed with grey bars down both sides, because the card slot is landscape while the
+thumbnail is square. It looked broken next to mods that filled their cards.
+
+`tile.png` is 16:9 so it fills the card, and it is deliberately sparse: at listing size it
+renders about 380px wide, a fifth of its real size, so it carries only the wordmark, the
+Zzz and two short lines. The other three images are far too text-dense to survive that
+reduction, which is why the tile is its own image rather than a reuse of one of them.
+
+Check any change to it by downscaling to 384x216 and looking at the result. The first
+version failed exactly there: the tallest Z descended into "SERVER-SIDE MOD" only once the
+image was shrunk.
 
 The gallery is deliberately typographic rather than screenshots. Gameplay stills say
 little about a server-side mod, and the audience is server admins deciding whether they
