@@ -247,6 +247,16 @@ jobs:
     if: github.ref_type == 'tag' && vars.NEXUS_FILE_ID != ''
     needs: [validate, build]
     runs-on: ubuntu-latest
+    # The API key lives in this environment rather than in repository secrets, because an
+    # environment can carry protection rules and repository secrets cannot. Restrict it to
+    # tags matching v* and, if you want a human gate before anything reaches the public
+    # mod page, add yourself as a required reviewer. Publishing is hard to take back once
+    # people have downloaded it.
+    #
+    # Only the API key is scoped here. NEXUS_FILE_ID stays a repository variable because
+    # the job-level `if` above is evaluated before the environment is resolved, and it is
+    # not a secret anyway: it is visible on the public mod page.
+    environment: nexus
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
