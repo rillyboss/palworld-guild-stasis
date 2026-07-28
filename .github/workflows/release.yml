@@ -1,0 +1,283 @@
+name: Release
+
+# Builds the distributable zip, and on a version tag publishes it to a GitHub Release
+# and optionally to Nexus Mods.
+#
+# The validate job is the point of this workflow. Every check in it corresponds to a
+# mistake that has actually happened in this repo, so the zip cannot ship with a
+# manifest pointing at a missing thumbnail, a DebugMode left on, a version that
+# disagrees with itself, or a testing flag left enabled.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # needed only by the release job, to create the Release
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only tracked files are present in a checkout, so "file missing here" is the
+      # same thing as "file not committed". That is exactly how thumbnail.png slipped
+      # through once: .gitignore silently excluded it while Info.json referenced it.
+      - name: Manifest is valid and shippable
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, sys
+
+          fail = []
+          info = json.load(open('Info.json'))
+
+          if info.get('DebugMode') is not False:
+              fail.append('Info.json DebugMode must be false for release '
+                          f'(is {info.get("DebugMode")!r}); true forces the loader '
+                          'to reinstall the mod every launch')
+
+          pkg = info.get('PackageName', '')
+          if not re.fullmatch(r'[A-Za-z0-9]+', pkg):
+              fail.append(f'PackageName {pkg!r} must match ^[A-Za-z0-9]+$')
+
+          if not info.get('Author'):
+              fail.append('Info.json Author is empty')
+
+          thumb = info.get('Thumbnail')
+          if thumb and not os.path.exists(thumb):
+              fail.append(f'Info.json references Thumbnail {thumb!r} but it is not in '
+                          'the repo. Either commit it or drop the field')
+
+          rules = info.get('InstallRule') or []
+          if not rules:
+              fail.append('Info.json has no InstallRule')
+          for r in rules:
+              if r.get('Type') not in ('Paks', 'Lua', 'LogicMods', 'UE4SS', 'PalSchema'):
+                  fail.append(f'InstallRule Type {r.get("Type")!r} is not one of the '
+                              'five values the loader accepts')
+              if r.get('IsServer') is not True:
+                  fail.append('InstallRule IsServer must be true; this mod is '
+                              'server-side only and cannot work client-side')
+
+          # Version must agree in every place it is written.
+          lua = open('Scripts/main.lua', encoding='utf-8').read()
+          m = re.search(r'MOD_VERSION\s*=\s*"([^"]+)"', lua)
+          if not m:
+              fail.append('could not find MOD_VERSION in Scripts/main.lua')
+          elif m.group(1) != info.get('Version'):
+              fail.append(f'version mismatch: Info.json {info.get("Version")!r} vs '
+                          f'main.lua MOD_VERSION {m.group(1)!r}')
+
+          if info.get('Version') and f"## {info['Version']}" not in open('CHANGELOG.md', encoding='utf-8').read():
+              fail.append(f'CHANGELOG.md has no "## {info["Version"]}" entry')
+
+          if fail:
+              print('MANIFEST VALIDATION FAILED:')
+              for f in fail:
+                  print(f'  - {f}')
+              sys.exit(1)
+          print(f'manifest ok, version {info["Version"]}')
+          PY
+
+      - name: Config ships with safe defaults
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, sys
+          s = open('Scripts/config.lua', encoding='utf-8').read()
+
+          # Anything here being wrong is either dangerous on a real server or defeats
+          # the mod's per-guild premise entirely.
+          required = {
+              'mode':                       '"run"',
+              'dry_run':                    'false',
+              'force_suppress_for_testing': 'false',
+              'probe_write':                'nil',
+              'stop_work_when_offline':     'false',
+          }
+          fail = []
+          for key, want in required.items():
+              m = re.search(rf'^\s*{key}\s*=\s*([^,]+),', s, re.M)
+              if not m:
+                  fail.append(f'{key} not found in config.lua')
+              elif m.group(1).strip() != want:
+                  fail.append(f'{key} must ship as {want}, found {m.group(1).strip()}')
+
+          if fail:
+              print('CONFIG VALIDATION FAILED:')
+              for f in fail:
+                  print(f'  - {f}')
+              sys.exit(1)
+          print('config defaults ok')
+          PY
+
+      - name: Lua syntax check
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq lua5.4 > /dev/null
+          for f in Scripts/*.lua; do
+            luac5.4 -p "$f" && echo "  ok $f"
+          done
+
+      - name: No credentials committed
+        run: |
+          set -euo pipefail
+          # Real host configs are gitignored; only .example templates may be tracked.
+          if git ls-files 'tools/*.config.ps1' | grep -v '\.example$'; then
+            echo "FAIL: a real host config is tracked"; exit 1
+          fi
+          # Placeholders are fine, real-looking values are not. Done without a negative
+          # lookahead on purpose: git grep -E has no PCRE, so a lookahead here fails to
+          # compile, exits non-zero, and the check silently passes forever.
+          if git ls-files 'tools/*.example' | xargs -r grep -nE '(AdminPassword|SftpPass)[[:space:]]*=' \
+               | grep -v CHANGEME; then
+            echo "FAIL: an .example template holds a non-placeholder secret"; exit 1
+          fi
+          echo "no credentials in tracked files"
+
+      - id: version
+        run: |
+          V=$(python3 -c "import json;print(json.load(open('Info.json'))['Version'])")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            if [ "$TAG" != "$V" ]; then
+              echo "FAIL: tag v$TAG does not match Info.json version $V"; exit 1
+            fi
+            echo "tag matches manifest version $V"
+          fi
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Users get a folder that drops straight into ue4ss/Mods/. Deliberately excludes
+      # tools/ and docs/, and above all tools/probe/, which writes to a live game.
+      - name: Assemble the distributable
+        run: |
+          set -euo pipefail
+          V="${{ needs.validate.outputs.version }}"
+          mkdir -p "dist/GuildStasis/Scripts"
+          cp Info.json enabled.txt thumbnail.png README.md CHANGELOG.md LICENSE dist/GuildStasis/
+          cp Scripts/main.lua Scripts/config.lua dist/GuildStasis/Scripts/
+          cd dist && zip -rq "GuildStasis-$V.zip" GuildStasis
+          echo "== zip contents:"
+          unzip -l "GuildStasis-$V.zip"
+
+      - name: Nothing unshippable leaked in
+        run: |
+          set -euo pipefail
+          V="${{ needs.validate.outputs.version }}"
+          LIST=$(unzip -Z1 "dist/GuildStasis-$V.zip")
+          for bad in probe tools/ docs/ config.ps1 backups; do
+            if echo "$LIST" | grep -q "$bad"; then
+              echo "FAIL: zip contains '$bad'"; exit 1
+            fi
+          done
+          # Exactly the eight paths a user should get, plus the folder entries.
+          COUNT=$(echo "$LIST" | grep -vc '/$')
+          if [ "$COUNT" -ne 8 ]; then
+            echo "FAIL: expected 8 files in the zip, found $COUNT:"; echo "$LIST"; exit 1
+          fi
+          echo "zip contents verified"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GuildStasis-${{ needs.validate.outputs.version }}
+          path: dist/GuildStasis-${{ needs.validate.outputs.version }}.zip
+          if-no-files-found: error
+
+  github-release:
+    if: github.ref_type == 'tag'
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: GuildStasis-${{ needs.validate.outputs.version }}
+          path: dist
+
+      # gh is preinstalled on the runner, so no third-party action is needed here.
+      - name: Create the Release with the changelog section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V="${{ needs.validate.outputs.version }}"
+          python3 - "$V" > notes.md <<'PY'
+          import sys
+          v = sys.argv[1]
+          out, on = [], False
+          for line in open('CHANGELOG.md', encoding='utf-8'):
+              if line.startswith(f'## {v}'):
+                  on = True; continue
+              if on and line.startswith('## '):
+                  break
+              if on:
+                  out.append(line)
+          print(''.join(out).strip() or f'Release {v}')
+          PY
+          gh release create "v$V" "dist/GuildStasis-$V.zip" \
+            --title "Guild Stasis $V" --notes-file notes.md
+
+  nexus:
+    # Skips cleanly until NEXUS_FILE_ID is set, because the Nexus Upload API can only
+    # add a version to an EXISTING file. The mod page and its first file must be
+    # created by hand once; everything after that is automated.
+    if: github.ref_type == 'tag' && vars.NEXUS_FILE_ID != ''
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: GuildStasis-${{ needs.validate.outputs.version }}
+          path: .
+
+      - name: Extract changelog for this version
+        id: notes
+        run: |
+          set -euo pipefail
+          {
+            echo 'text<<CHANGELOG_EOF'
+            python3 - "${{ needs.validate.outputs.version }}" <<'PY'
+          import sys
+          v = sys.argv[1]
+          out, on = [], False
+          for line in open('CHANGELOG.md', encoding='utf-8'):
+              if line.startswith(f'## {v}'):
+                  on = True; continue
+              if on and line.startswith('## '):
+                  break
+              if on:
+                  out.append(line)
+          print(''.join(out).strip() or f'Release {v}')
+          PY
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # Pinned to an exact tag: this action is in open beta (v1.0.0-beta.10 as of
+      # 2026-07-27) and the Nexus API it calls is itself beta, so it may change.
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUS_FILE_ID }}
+          mod_id: ${{ vars.NEXUS_MOD_ID }}
+          filename: GuildStasis-${{ needs.validate.outputs.version }}.zip
+          version: ${{ needs.validate.outputs.version }}
+          display_name: Guild Stasis ${{ needs.validate.outputs.version }}
+          changelog: ${{ steps.notes.outputs.text }}
+          category: main
+          update_mod_version: 'true'
+          archive_existing_version: 'true'
