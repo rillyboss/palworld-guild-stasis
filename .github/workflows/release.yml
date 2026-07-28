@@ -237,8 +237,17 @@ jobs:
                   out.append(line)
           print(''.join(out).strip() or f'Release {v}')
           PY
-          gh release create "v$V" "dist/GuildStasis-$V.zip" \
-            --title "Guild Stasis $V" --notes-file notes.md
+          # Create or update, because re-runs happen. `gh release create` fails outright if
+          # the release already exists, which turns any re-run of a tagged build into a red
+          # X even when nothing is wrong.
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "release v$V exists, updating it"
+            gh release edit "v$V" --title "Guild Stasis $V" --notes-file notes.md
+            gh release upload "v$V" "dist/GuildStasis-$V.zip" --clobber
+          else
+            gh release create "v$V" "dist/GuildStasis-$V.zip" \
+              --title "Guild Stasis $V" --notes-file notes.md
+          fi
 
   nexus:
     # Skips cleanly until NEXUS_FILE_ID is set, because the Nexus Upload API can only
