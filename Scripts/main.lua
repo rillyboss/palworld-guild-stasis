@@ -33,7 +33,7 @@ if not ok_cfg or type(CFG) ~= "table" then
     return
 end
 
-local MOD_VERSION  = "0.2.0"
+local MOD_VERSION  = "0.3.0"
 local TAG          = "[STASIS] "
 local SUPPRESS_KEY = "GuildStasis_Offline"   -- our namespaced FName key
 

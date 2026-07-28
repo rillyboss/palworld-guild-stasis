@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.3.0 - 2026-07-28
+
+Two latency fixes and two changed defaults. No new mechanism: 0.2.0's work-speed freeze is
+unchanged and still the thing doing the work.
+
+### Fixed
+
+- **Suppression took up to two sweep intervals, not one.** The sweep that notices a guild
+  has gone offline cannot suppress it, because at that instant the guild has been offline
+  for zero seconds and the grace check fails. Suppression therefore landed on the *next*
+  sweep, making the worst case `sweep_interval * 2`. The noticing sweep now schedules one
+  follow-up at the grace deadline, so the worst case is `sweep_interval + grace_seconds`.
+  Measured on a live six-guild server: all six suppressed 16s after going offline, where
+  the old path would have waited a further minute with 100 Pals still working.
+- **Release after login waited for the next scheduled sweep.** The hook fires on
+  possession, but the guild's own status flag flips to `Online` slightly after, so the
+  sweep inside the hook still saw the player as offline and did nothing. Observed in game
+  as 10 to 15 seconds of idle Pals. The hook now queues follow-up sweeps at 2, 5, 10 and
+  20 seconds. An earlier note in `docs/RESEARCH.md` claiming release happened "~8s after
+  login" was a favourable race and has been corrected.
+
+### Changed
+
+- `sweep_interval_ms` default is now `60000`, up from `30000`. A sweep costs one
+  `FindAllOf` over the whole UObject array plus a read-write-verify per suppressed Pal,
+  roughly 300 reflected writes on a 100-Pal server. Neither latency now depends much on
+  this value, so the interval is close to free to raise.
+- `topup_once_on_offline` default is now `false`. Freezing SAN stops absence being
+  punished; refilling it rewards absence, which is not this mod's job. A guild returns to
+  exactly the SAN it left with. The old comment claiming Pals would otherwise "stay
+  miserable forever" was wrong twice over: SAN is frozen so it does not fall, only fails to
+  recover, and the freeze lifts the moment anyone logs in.
+
+### Added
+
+- `lvl=` and `exp=` in per-Pal log lines, which is how the XP question below was settled.
+
+### Verified on a live dedicated server
+
+- **Work speed zero covers every job, not just crafting.** All thirteen suitabilities read
+  a final speed of `0` on a suppressed Pal, including the three the test Pal had ranks in
+  (Handcraft 50, Transport 2, MonsterFarm 12). The base-value getters do not move, which
+  looked alarming until the `_withBuff_` variants were checked.
+- **The game keeps its own entry in the same container**, `CraftSpeedRates: [Sick=1.0,
+  GuildStasis_Offline=0.0]`, so this is Palworld's native work-speed mechanism and the
+  mod's namespaced key composes with it rather than fighting it.
+- Running in production on six guilds, 11 camps, 112 Pals, `write_errors=0`, with
+  `speed_zero` matching `pals_written` on every sweep.
+- New Pals are picked up automatically. Pal count went 100 to 112 between sessions as
+  players bred and caught more, and all of them were suppressed without intervention.
+
+### Still unverified
+
+- No overnight soak. Longest clean run observed is 71 minutes across 72 sweeps at a steady
+  59.4s cadence, which is past the 40 minute mark where UE4SS's timer-death bug starts to
+  appear but short of the 2 hour outer bound. Since 0.2.0 a dead timer leaves suppressed
+  Pals frozen at zero work speed until a restart, which is visible to players where the
+  old failure mode was silent. The heartbeat is the early warning.
+- The full collateral scope of `SetDisableNaturalUpdate` is still uncatalogued.
+
+### Notes
+
+- The mod does not cure sickness and does not restore SAN, by decision. It cannot make a
+  Pal sick while a guild is offline, since both starvation and overwork are off, but a Pal
+  that was already sick stays sick for the offline window. Medicine or the Pal Box fixes
+  that, both vanilla.
+- Raids are not addressed, on the view that they do not fire against a guild with nobody
+  online. That is a judgement call rather than something proven here, and
+  `docs/V2-PLAN.md` records the cheap way to test it.
+
 ## 0.2.0 - 2026-07-27
 
 Stasis now means no production. While a guild is suppressed, every one of its base
