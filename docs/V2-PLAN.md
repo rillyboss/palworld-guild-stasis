@@ -303,15 +303,16 @@ The fix is manual and entirely vanilla: medicine, or put the Pal in the Pal Box,
 cures it on the game's own timer. Worth telling affected players once, because "my Pal
 has been sick for a week" is otherwise going to get blamed on the mod.
 
-### The consistency question, stated rather than buried
+### The consistency question, resolved
 
-`topup_once_on_offline` tops SAN up once when a guild goes offline, and the argument for
-it is that the mod's own freeze creates a permanent trap: a frozen Pal never eats, so it
-never recovers SAN, so a guild that logs off miserable stays miserable forever.
+`topup_once_on_offline` used to default true, on the argument that the mod's own freeze
+creates a permanent trap: a frozen Pal never eats, so it never recovers SAN.
 
-That same argument applies to sickness, and the decision here goes the other way. The
-distinction being drawn is that SAN is repaired to undo a trap the mod itself creates,
-whereas sickness is pre-existing damage the mod is merely declining to heal. That is a
-defensible line but it is a line, not a principle, and it is the owner's call to draw.
-If it ever feels inconsistent, the honest options are to cure sickness too or to turn
-`topup_once_on_offline` off, not to pretend the two cases are unrelated.
+The owner has since turned it off, which makes the whole policy consistent: freeze
+everything, restore nothing. Absence is not punished and it is not rewarded either.
+
+The original argument was also weaker than it looked. SAN is frozen, so it does not fall,
+it merely fails to recover, and the freeze lifts the moment anyone logs in. So the effect
+was bounded by the offline window rather than permanent, and nothing bad happened during
+it: a suppressed Pal is not working and cannot trigger the low-SAN incidents it otherwise
+would. "Stays miserable forever" was an overstatement, now corrected in `config.lua`.

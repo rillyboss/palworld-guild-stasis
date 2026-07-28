@@ -57,7 +57,9 @@ Still unverified: durability beyond a couple of hours, and the full collateral s
 
 The mod will not *make* a Pal sick: hunger is frozen and work speed is zero, so neither starvation nor overwork can happen while a guild is offline. But a Pal that was already sick stays sick for the whole offline window, because a hunger-frozen Pal never eats and the eat-driven recovery path never fires. The fix is vanilla and manual: medicine, or put the Pal in the Pal Box, which cures it on the game's own timer. Worth telling affected players, so a week-old illness does not get blamed on the mod.
 
-One deliberate exception, so the asymmetry is visible rather than hidden: `topup_once_on_offline` does top SAN up once, because the freeze would otherwise trap a guild that logged off with miserable Pals in that state permanently. The line being drawn is repairing a trap the mod itself creates, versus healing damage that was already there. Turn it off if you disagree.
+**It does not restore SAN either.** Freezing SAN stops absence being punished; refilling it would reward absence, so `topup_once_on_offline` ships `false`. A guild comes back to exactly the SAN it left with.
+
+Worth knowing what that does and does not mean. SAN is frozen while a guild is suppressed, so it does not fall, it simply does not recover, and nothing bad happens in the meantime because a suppressed Pal is not working and cannot trigger the low-SAN incidents it normally would. The moment anyone logs in, the freeze lifts and normal recovery resumes.
 
 ## Requirements
 
@@ -163,7 +165,7 @@ Runtime changes do not survive a restart. Edit `config.lua` for that.
 | `freeze_hunger` | `true` | Freezes hunger via `SetDecreaseFullStomachRates(key, 0.0)`. The highest-confidence lever, verified to drive the observed decay rate from `1.0` to `0.0`. |
 | `sanity_mode` | `"natural_update"` | How SAN is handled. `"natural_update"` is the verified option (`SetDisableNaturalUpdate`, a plain reflected UFUNCTION). `"none"` leaves SAN alone. `"disable_flags"` and `"topup"` are alternatives kept for hosts where the verified one misbehaves. See `docs/RESEARCH.md`. |
 | `zero_work_speed` | `true` | Drops each suppressed Pal's effective work speed to zero, so an offline base produces nothing. Inserts a `0.0` entry under the mod's own FName key into `SaveParameter.CraftSpeedRates`, the same container shape and the same "0.0 wins" rule as the hunger lever. Verified `70` to `0` and back, across all thirteen work suitabilities. Session state only, so nothing persists and no restore map is needed. |
-| `topup_once_on_offline` | `true` | Tops SAN up once on the offline transition. A hunger-frozen Pal never eats, so the eat-driven SAN recovery path never fires again, and a guild that logs off with miserable Pals would otherwise stay miserable forever. Set `false` if you consider it too generous. |
+| `topup_once_on_offline` | `false` | Tops SAN up once on the offline transition. Off by default: the mod's job is to stop absence being punished, not to reward it, and a guild should return to exactly the SAN it left with. Turning it on is safe, it just hands out a free refill on every logout. |
 | `topup_below_ratio` | `0.9` | Only used when `sanity_mode = "topup"`. Tops up when SAN falls below this fraction of the Pal's maximum. Deliberately a ratio: `MaxFullStomach` varies from 100 to 600 by species, so absolute thresholds are wrong. |
 | `stop_work_when_offline` | `false` | **Superseded by `zero_work_speed`. Leave off, and never enable both.** The older route, which rewrites each Pal's off-work job list. It writes to the save file, its restore path is unimplemented, and getting it wrong silently destroys players' per-Pal work settings. Kept only as a fallback in case a game patch breaks the `CraftSpeedRates` route. |
 

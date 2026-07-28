@@ -95,10 +95,22 @@ return {
     topup_below_ratio = 0.9,
 
     -- On the offline transition, top sanity up ONCE even when sanity_mode is a
-    -- pause mode. Without this, a guild that logs off with already-miserable
-    -- pals stays miserable forever: a hunger-frozen pal never eats, so the
-    -- eat-driven sanity recovery path never fires again.
-    topup_once_on_offline = true,
+    -- pause mode.
+    --
+    -- OFF by default, deliberately. The mod's job is to stop absence being punished,
+    -- not to reward it, and a free SAN refill every time you log out is a reward. A
+    -- guild returns to exactly the SAN it left with, which is the point.
+    --
+    -- The old comment here claimed that without this a guild "stays miserable
+    -- forever", which was an overstatement worth correcting. SAN is frozen while
+    -- suppressed, so it does not fall, it merely does not recover. The moment anyone
+    -- logs in the freeze lifts, pals eat, and recovery resumes as normal. So the
+    -- effect is bounded by the offline window, not permanent, and nothing bad happens
+    -- during it either: a suppressed pal is not working, so low SAN cannot trigger
+    -- the incidents it normally would.
+    --
+    -- Set true if you would rather absences came with a clean slate.
+    topup_once_on_offline = false,
 
     ----------------------------------------------------------------------------
     -- STOP WORK
