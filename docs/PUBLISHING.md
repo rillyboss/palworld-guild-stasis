@@ -115,6 +115,40 @@ Nexus permissions to match: reuse and modification allowed, credit expected. Cho
 restrictive permissions here would contradict the licence shipped inside the download, and
 the licence is what governs.
 
+## Cutting a release
+
+The version lives in three files plus the git tag, and the workflow fails if they disagree.
+`tools/bump-version.ps1` does all of them at once:
+
+```powershell
+.	oolsump-version.ps1 -Type patch      # or minor, major
+.	oolsump-version.ps1 -Version 1.0.0   # explicit
+.	oolsump-version.ps1 -Type minor -DryRun
+```
+
+It refuses to run on a dirty tree, so the bump is always its own commit, and it refuses a
+version that already has a tag.
+
+Then:
+
+1. Edit `CHANGELOG.md`, write the entry, delete the TODO line
+2. `git add -A && git commit -m "Release x.y.z"`
+3. `git tag -a vx.y.z -m "vx.y.z" && git push origin main --follow-tags`
+
+The tag push is what triggers everything: validate, build, GitHub Release with notes pulled
+from the changelog, then Nexus if `NEXUS_FILE_ID` is set.
+
+**Why the changelog is scaffolded and not generated.** The entries in this project explain
+what was ruled out, what was measured, and what is still unverified. That is most of their
+value and a list of commit subjects cannot express it. So the script drops the commit
+subjects in as raw material under a TODO marker and you write the entry. The workflow
+refuses to publish while that marker is present, so the placeholder cannot ship.
+
+**Why the version is duplicated at all.** `Info.json` is the natural source of truth, but
+`main.lua` logs its own version at startup and cannot read a JSON file without a parser it
+does not have. Duplicating it and validating in CI is less machinery than shipping a JSON
+parser to read one string.
+
 ## Release checklist
 
 Before tagging anything:

@@ -75,8 +75,18 @@ jobs:
               fail.append(f'version mismatch: Info.json {info.get("Version")!r} vs '
                           f'main.lua MOD_VERSION {m.group(1)!r}')
 
-          if info.get('Version') and f"## {info['Version']}" not in open('CHANGELOG.md', encoding='utf-8').read():
-              fail.append(f'CHANGELOG.md has no "## {info["Version"]}" entry')
+          # The changelog entry must exist AND have been written. bump-version.ps1 leaves a
+          # TODO marker in the scaffold, and shipping that would be worse than shipping no
+          # entry at all, because it looks deliberate.
+          changelog = open('CHANGELOG.md', encoding='utf-8').read()
+          ver = info.get('Version')
+          if ver and f'## {ver}' not in changelog:
+              fail.append(f'CHANGELOG.md has no "## {ver}" entry')
+          elif ver:
+              section = changelog.split(f'## {ver}', 1)[1].split('\n## ', 1)[0]
+              if 'TODO write this entry' in section:
+                  fail.append(f'the CHANGELOG.md entry for {ver} is still the scaffold. '
+                              'Write it and delete the TODO line')
 
           if fail:
               print('MANIFEST VALIDATION FAILED:')
