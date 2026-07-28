@@ -49,13 +49,15 @@ Working and measured:
 
 For scale on what this prevents: during that same window the working control Pal's SAN fell from 98.2 to 79.4, about 19 points in ten minutes, while the suppressed Pal held at 100.0 and its stomach read `71.698272705078` at both ends of the window. SAN, not starvation, is the fast-moving harm.
 
-Still unverified: durability beyond a couple of hours, and the full collateral scope of `SetDisableNaturalUpdate`. Production has been observed alive at 75 minutes and 149 sweeps with no write errors, which is past the 40 minute mark where UE4SS's timer-death bug starts to appear, but that is not an overnight soak.
+Still unverified: durability beyond a couple of hours, and the full collateral scope of `SetDisableNaturalUpdate`.
+
+**Under investigation:** four Pals on the production server became sick after the mod was installed. Freezing hunger and stopping work should close both documented routes into sickness, so either the freeze does not cover what it appears to, or the mod is contributing. It is not yet established whether those Pals sickened while their guild was suppressed or while it was online. Tracked in `docs/V3-KICKOFF.md`, and this section will be updated either way. Production has been observed alive at 75 minutes and 149 sweeps with no write errors, which is past the 40 minute mark where UE4SS's timer-death bug starts to appear, but that is not an overnight soak.
 
 ### What it deliberately does not do
 
 **It does not cure sickness.** Healing is a benefit beyond "do not punish absence", which is the line this mod tries not to cross, so nothing sickness-related is ever written.
 
-The mod will not *make* a Pal sick: hunger is frozen and work speed is zero, so neither starvation nor overwork can happen while a guild is offline. But a Pal that was already sick stays sick for the whole offline window, because a hunger-frozen Pal never eats and the eat-driven recovery path never fires. The fix is vanilla and manual: medicine, or put the Pal in the Pal Box, which cures it on the game's own timer. Worth telling affected players, so a week-old illness does not get blamed on the mod.
+A Pal that was already sick stays sick for the whole offline window, because a hunger-frozen Pal never eats and the eat-driven recovery path never fires. The fix is vanilla and manual: medicine, or put the Pal in the Pal Box, which cures it on the game's own timer. Worth telling affected players, so a week-old illness does not get blamed on the mod.
 
 **It does not restore SAN either.** Freezing SAN stops absence being punished; refilling it would reward absence, so `topup_once_on_offline` ships `false`. A guild comes back to exactly the SAN it left with.
 
