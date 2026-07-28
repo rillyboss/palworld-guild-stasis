@@ -82,6 +82,39 @@ Check each site's current submission rules yourself at upload time. Category nam
 
 GitHub Releases is worth doing regardless, even if the mod sites are the front door. Tag the version, attach the zip, and paste the changelog entry. It gives you a stable download URL that does not depend on any site's policies, and it is the natural home for a mod whose docs are this much of the product.
 
+## Filling in the Nexus mod page fields
+
+### Requirements (optional step)
+
+**One requirement, UE4SS.** That is the whole dependency tree.
+
+Nexus offers two methods and the choice depends on one check:
+
+- **File-to-file (recommended)** can only reference files hosted on Nexus. There is a
+  page for the exact build this mod pins, [UE4SS (RE-UE4SS Okaetsu
+  Experimental-Palworld)](https://www.nexusmods.com/palworld/mods/3035). Before pointing
+  at it, confirm the version there matches the pinned commit `c838a8ac` / SHA256
+  `768A45...ACA1CA`. If the mirror has moved to a different build, do not reference it:
+  that sends users to a build this mod was never tested against.
+- **Mod requirements (legacy)** is the fallback, and the only option that supports
+  external requirements. Use it to link Okaetsu's GitHub release directly if the Nexus
+  mirror does not match.
+
+**What cannot go in this section, and why that is fine.** The requirements that actually
+stop people running this mod are a Windows dedicated build, write access to
+`Pal/Binaries/Win64`, and the ability to restart. Nexus models files and mods, not host
+capabilities, so none of them can be expressed here. The section will look thin. Do not
+pad it. Someone with a Linux server satisfies every Nexus requirement and still cannot run
+the mod, which is why those constraints live in the description and in
+`media/gallery-3-requirements.png` instead.
+
+### Permissions (optional step)
+
+`LICENSE` is MIT, which allows redistribution and modification with attribution. Set the
+Nexus permissions to match: reuse and modification allowed, credit expected. Choosing
+restrictive permissions here would contradict the licence shipped inside the download, and
+the licence is what governs.
+
 ## Release checklist
 
 Before tagging anything:
