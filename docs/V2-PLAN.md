@@ -10,7 +10,7 @@ Two features, and the second exists only because of the first.
 
 **Goal:** suppressed Pals produce nothing. No hauling, no crafting, no output.
 
-**Status:** a strong candidate mechanism, not yet runtime-verified.
+**Status: SHIPPED in v0.2.0 and verified end to end.** See "THE MECHANISM" below. The three ruled-out sections above it are kept because the eliminations are what make the final choice trustworthy.
 
 ### Ruled out: `CurrentOrderType`
 
@@ -53,7 +53,7 @@ Both ends of the move are visible from Lua. The Pal Box containers are ordinary 
 
 Keeping the distinction straight matters for whoever reads this next: parking is not unreachable, it is unsafe. "Unreachable" invites a clever retry. "Unsafe" should not.
 
-The cost of this being dead: v2 loses the free SAN regeneration and sickness cure that made the Pal Box so attractive, so the sickness question below reopens.
+The cost of this being dead: v2 loses the free SAN regeneration and sickness cure that made the Pal Box so attractive. The sickness question therefore reopened, and has since been closed with a decision not to cure. See the end of this document.
 
 ### THE MECHANISM: CraftSpeedRates, verified on a live server
 
@@ -69,7 +69,7 @@ restart    CraftSpeedRates entries gone entirely
 
 Release needs no stored value: neutralising the mod's own entry to `1.0` lets each Pal's computed speed recover by itself. There is nothing saved that can be lost or mismatched, which is why this route has no restore map at all.
 
-Observed in game: a Pal walks to its station, plays the work animation, and produces nothing. Functionally inert, visually busy.
+Observed in game: a Pal walks to its station, plays the work animation, and the progress slider never moves. After a while the worker AI gives up and the Pal falls asleep, in daylight. So the end state is genuinely inert, not merely unproductive, which is better than this plan originally predicted.
 
 Everything below was the analysis that led here, kept because the reasoning matters more than the conclusion.
 
@@ -98,10 +98,11 @@ release:   find our entry; set Value = 1.0   (1.0 is this container's identity)
 
 Find-then-append keeps it idempotent across sweeps rather than growing the array. Element removal from Lua is not established, so release neutralises to `1.0` instead of deleting -- harmless, and the entry vanishes on restart anyway.
 
-Two things still to prove, and both are behavioural rather than mechanical:
+Both of the behavioural questions this plan raised are now answered:
 
-1. **M7/M10.** Craft speed 0 is a *stat* reading. It has to be confirmed that Pals actually stop and that output is zero, not merely slow. Note `GetCraftSpeedByWorkSuitability(Handcraft)` did **not** move (stayed 50), so which getter the work system actually consumes is not yet established.
-2. Whether non-crafting work -- hauling, transport, watering -- is gated by craft speed at all. A Pal that still carries items while producing nothing would satisfy the goal, but that needs observing rather than assuming.
+1. **M7/M10 pass.** A Pal was watched at a workbench for over ten minutes with the progress slider frozen. Output is zero, not merely slow.
+2. **Every work type is covered.** All thirteen suitabilities read a final speed of `0` on a suppressed Pal, including the three the test Pal actually had ranks in (Handcraft 50, Transport 2, MonsterFarm 12). The base-value getters like `GetCraftSpeedByWorkSuitability` do not move, which was the thing that looked worrying; the `_withBuff_` variants are the computed ones and they all go to zero.
+3. **No XP either**, measured against a control that gained 96 XP and a level over the same ten minutes.
 
 ### How this was found, and the earlier framing that was wrong
 
@@ -170,7 +171,22 @@ Documenting "v1's tradeoff stands, and here is the exhaustive list of why" is a 
 
 **Goal:** a guild that cannot defend itself is not attacked.
 
-**Status: deferred, quite possibly unnecessary, and now cheap to settle.** A community claim (reported 2026-07-27) holds that raids cannot occur while every member of a guild is offline. If that is right, this feature is moot.
+**Status: CLOSED, 2026-07-27, by the server owner's decision.** Not building it.
+
+The reasoning: raids are not believed to occur against a guild with nobody online, so there is nothing to defend against. That belief is **not verified here**, and this document should not be read as claiming it is. It is a judgement call by the person who runs the server and carries the consequences, which is the right person to make it.
+
+If anyone revisits this, the work is already scoped and cheap. `PalGroupGuildBase` exposes two server-side, per-guild, `RegisterHook`-able UFunctions:
+
+```
+OnBaseCampRaidStarted_ServerInternal(RaidDetectModule : Object)
+OnBaseCampRaidEnded_ServerInternal(RaidDetectModule : Object)
+```
+
+Hook them log-only, leave a guild offline overnight, and see whether either ever fires. That settles the premise in one run. Everything below is the analysis behind the decision, kept because it is what makes the decision informed rather than assumed.
+
+### The original framing
+
+A community claim (reported 2026-07-27) holds that raids cannot occur while every member of a guild is offline. If that is right, this feature is moot.
 
 Runtime testing found the detection hook that makes M9 trivial. `PalGroupGuildBase` has two server-side, per-guild UFunctions:
 
@@ -183,7 +199,7 @@ Both are `RegisterHook`-able, so M9 becomes "hook them, leave a guild offline ov
 
 It is not confirmed. `docs/RESEARCH.md` records why the claim gets no free pass -- the Palworld blog ecosystem fabricates, and the static pass found no online-player gate anywhere near the invader path. Note also that `bAllPlayerNotOnlineAndAlreadyReset` is **not** evidence for it: that flag is bookkeeping for `bAutoResetGuildNoOnlinePlayers`, a different feature entirely, and the similar wording is a coincidence worth resisting.
 
-The practical consequence is the same either way: **build nothing here yet.** Run M9 first. It is now a one-line read rather than a research project, and the outcome either closes the feature or tells us precisely what to build.
+The practical consequence was the same either way: build nothing until M9 ran. The owner has since closed the feature outright, so M9 is no longer a gate on anything. It stays documented above as the cheap way to reopen the question if a player ever reports an offline base being raided, which is the evidence that would change the decision.
 
 **The coupling is weaker than this plan first claimed.** The argument was that parking Pals creates raid exposure that v1 did not have, so the two features ship together or not at all. Parking in the Pal Box changes that: a Pal in the box is not in the world and cannot be killed. What stays exposed is the *base* -- structures, chests, and whatever a raider can break. So Feature 1 can ship alone without putting Pals at risk, and Feature 2 becomes about property rather than lives. That is a judgement call for the server owner, not a blocker.
 
@@ -260,10 +276,42 @@ Feature 2 went the other way: it is probably unnecessary, and if it is needed th
 
 Because the writes are session state, v2 no longer needs M8's restore map, M11's partial-failure handling is trivial (a failed write leaves a Pal working, which is v1 behaviour), and the README's "nothing persists" claim stands unchanged.
 
-## The sickness question, reopened
+## The sickness question: CLOSED, no cure
 
-The open decision was whether to add a `cure_sickness_on_offline` flag, held back because curing sickness is a gameplay benefit beyond "don't punish absence".
+**Decided 2026-07-27 by the server owner: the mod will not cure sickness.** No
+`cure_sickness_on_offline` flag, and nothing sickness-related is written. The reasoning
+that held it back all along stands: curing sickness is a gameplay benefit beyond "do not
+punish absence", which is the line this mod tries not to cross.
 
-Parking changes the framing. `PalBoxTimePeriodRecoverySick` means the Pal Box cures sickness on a **vanilla** timer -- putting a sick Pal in the box is what a player does to heal it. So under the parking design the 17 already-sick production Pals recover through the game's own rule, with the mod writing nothing sickness-related.
+The Pal Box angle that briefly made this look easy is gone with the parking design.
+`PalBoxTimePeriodRecoverySick` does cure sickness on a vanilla timer, but the mod cannot
+move Pals into the box, so it cannot reach that mechanism. See the parking section above.
 
-It is still not free of judgement: the mod is what puts them in the box. But it is a much easier call than a mod-invented cure, and it removes the need for the flag.
+### What that means in practice, so nobody is surprised
+
+**The mod will not make a Pal sick.** It freezes hunger, so suppressed Pals do not
+starve, and zero work speed means they cannot be overworked. Both of the routes into
+`WorkerSick` are closed while a guild is offline. That is the whole point.
+
+**The mod will preserve sickness that already exists.** A Pal that was sick when its
+guild went offline stays sick for the entire offline window, because a hunger-frozen Pal
+never eats and the eat-driven recovery path never fires. The 17 sick Pals on the
+production server (11 in "Ben Dover's Doverson", 4 in "Butt Stuff", 2 in an unnamed
+guild) predate the mod and will stay sick until their owners deal with them.
+
+The fix is manual and entirely vanilla: medicine, or put the Pal in the Pal Box, which
+cures it on the game's own timer. Worth telling affected players once, because "my Pal
+has been sick for a week" is otherwise going to get blamed on the mod.
+
+### The consistency question, stated rather than buried
+
+`topup_once_on_offline` tops SAN up once when a guild goes offline, and the argument for
+it is that the mod's own freeze creates a permanent trap: a frozen Pal never eats, so it
+never recovers SAN, so a guild that logs off miserable stays miserable forever.
+
+That same argument applies to sickness, and the decision here goes the other way. The
+distinction being drawn is that SAN is repaired to undo a trap the mod itself creates,
+whereas sickness is pre-existing damage the mod is merely declining to heal. That is a
+defensible line but it is a line, not a principle, and it is the owner's call to draw.
+If it ever feels inconsistent, the honest options are to cure sickness too or to turn
+`topup_once_on_offline` off, not to pretend the two cases are unrelated.
