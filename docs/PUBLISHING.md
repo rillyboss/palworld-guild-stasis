@@ -117,6 +117,14 @@ the licence is what governs.
 
 ## Cutting a release
 
+There is a Claude Code skill for this at `.claude/skills/release/SKILL.md`. Say "cut a
+release" and it runs the whole sequence: picks the bump type from what actually changed,
+writes the changelog entry as prose rather than a commit list, validates locally before
+tagging, then watches the pipeline and confirms both the GitHub Release and the Nexus upload.
+It also carries the failure modes we have already hit, so they do not recur.
+
+Doing it by hand is below.
+
 The version lives in three files plus the git tag, and the workflow fails if they disagree.
 `tools/bump-version.ps1` does all of them at once:
 
