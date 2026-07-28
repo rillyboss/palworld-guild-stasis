@@ -252,7 +252,7 @@ Two transports, because neither is guaranteed on every host. Same commands eithe
 | `stasis.sweep` | Run a sweep immediately instead of waiting for the timer |
 | `stasis.help` | List the commands |
 
-An id prefix is enough, so `stasis.pals 78686694` works, and ambiguous prefixes are rejected rather than guessed.
+An id prefix is enough, so `stasis.pals A1B2C3D4` works, and ambiguous prefixes are rejected rather than guessed.
 
 Console registration uses UE4SS's `RegisterConsoleCommandHandler`, and it registers successfully (`console commands registered: 9` in the startup log). **Most host panels cannot reach it.** If your panel's console proxies to Palworld's admin API rather than UE's exec layer, you get:
 

@@ -296,8 +296,7 @@ starve, and zero work speed means they cannot be overworked. Both of the routes 
 **The mod will preserve sickness that already exists.** A Pal that was sick when its
 guild went offline stays sick for the entire offline window, because a hunger-frozen Pal
 never eats and the eat-driven recovery path never fires. The 17 sick Pals on the
-production server (11 in "Ben Dover's Doverson", 4 in "Butt Stuff", 2 in an unnamed
-guild) predate the mod and will stay sick until their owners deal with them.
+production server (11 in one guild, 4 in another, 2 in a third) predate the mod and will stay sick until their owners deal with them.
 
 The fix is manual and entirely vanilla: medicine, or put the Pal in the Pal Box, which
 cures it on the game's own timer. Worth telling affected players once, because "my Pal

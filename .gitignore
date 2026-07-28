@@ -28,7 +28,6 @@ mods.json
 scratch/
 tmp/
 *.tmp
-thumbnail.png
 
 # OS / editor
 Thumbs.db

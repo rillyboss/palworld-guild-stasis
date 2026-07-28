@@ -222,8 +222,8 @@ Prefer `GetContainer` over `TryGetContainer`: the latter returns its container t
 The server visibly knows when a player leaves -- its console prints
 
 ```
-[LOG] U2short1 joined the server. (User id: steam_..., Player id: ...)
-[LOG] U2short1 left the server. (User id: steam_...)
+[LOG] <player> joined the server. (User id: steam_..., Player id: ...)
+[LOG] <player> left the server. (User id: steam_...)
 ```
 
 so "why poll at all?" is a fair question. Three routes were checked and all are closed:

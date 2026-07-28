@@ -69,7 +69,7 @@ A static read of the retail server binary, before any live testing:
 
 ## The sickness decision, now mostly moot
 
-**17 Pals on the production server are already sick** (11 in "Ben Dover's Doverson", 4 in "Butt Stuff", 2 in an unnamed guild) from before the mod existed. v1 prevents further harm but does not heal, and a hunger-frozen Pal never eats so the recovery path never fires.
+**17 Pals on the production server are already sick** (11 in one guild, 4 in another, 2 in a third) from before the mod existed. v1 prevents further harm but does not heal, and a hunger-frozen Pal never eats so the recovery path never fires.
 
 The proposed fix was a `cure_sickness_on_offline` flag, held back because a mod-invented cure is a gameplay benefit beyond "don't punish absence". Under the parking design that flag is unnecessary: `PalBoxTimePeriodRecoverySick` means the box cures sickness on the game's own timer, which is exactly what a player does by hand. Still a judgement call, since the mod is what puts them in the box, but a much easier one.
 
