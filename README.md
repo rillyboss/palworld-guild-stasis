@@ -30,7 +30,7 @@ The third write matters as much as the first two. Earlier versions froze hunger 
 
 What it looks like in game: a suppressed Pal walks to its station and plays the work animation, but the progress bar never moves. After a while the worker AI gives up and the Pal goes to sleep, in daylight, and stays asleep until someone logs in.
 
-Raids are deliberately not addressed. Raids appear not to fire against a guild with nobody online, which would make the feature unnecessary. That is unconfirmed and tracked as M9 in `docs/V2-PLAN.md`.
+Raids are deliberately not addressed, on the view that they do not fire against a guild with nobody online. That is a judgement call rather than something proven here, and `docs/V2-PLAN.md` records the cheap way to test it if a player ever reports an offline base being raided.
 
 ## Status
 
@@ -49,7 +49,15 @@ Working and measured:
 
 For scale on what this prevents: during that same window the working control Pal's SAN fell from 98.2 to 79.4, about 19 points in ten minutes, while the suppressed Pal held at 100.0 and its stomach read `71.698272705078` at both ends of the window. SAN, not starvation, is the fast-moving harm.
 
-Still unverified: durability beyond about 20 minutes, since no overnight soak has been run, and the full collateral scope of `SetDisableNaturalUpdate`.
+Still unverified: durability beyond a couple of hours, and the full collateral scope of `SetDisableNaturalUpdate`. Production has been observed alive at 75 minutes and 149 sweeps with no write errors, which is past the 40 minute mark where UE4SS's timer-death bug starts to appear, but that is not an overnight soak.
+
+### What it deliberately does not do
+
+**It does not cure sickness.** Healing is a benefit beyond "do not punish absence", which is the line this mod tries not to cross, so nothing sickness-related is ever written.
+
+The mod will not *make* a Pal sick: hunger is frozen and work speed is zero, so neither starvation nor overwork can happen while a guild is offline. But a Pal that was already sick stays sick for the whole offline window, because a hunger-frozen Pal never eats and the eat-driven recovery path never fires. The fix is vanilla and manual: medicine, or put the Pal in the Pal Box, which cures it on the game's own timer. Worth telling affected players, so a week-old illness does not get blamed on the mod.
+
+One deliberate exception, so the asymmetry is visible rather than hidden: `topup_once_on_offline` does top SAN up once, because the freeze would otherwise trap a guild that logged off with miserable Pals in that state permanently. The line being drawn is repairing a trap the mod itself creates, versus healing damage that was already there. Turn it off if you disagree.
 
 ## Requirements
 
